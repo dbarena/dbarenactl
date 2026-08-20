@@ -1,0 +1,22 @@
+provider: supabase
+workload: tpcc
+scenario_path: ../../benchctl/scenarios/oriole-vs-postgres-tpcc-ec2.yaml
+test_points:
+  - tier: small
+    bound_type: io
+    set:
+      warehouses: "1"
+      threads: "1"
+      duration: "1m"
+  - tier: small
+    bound_type: compute
+    set:
+      warehouses: "1"
+      threads: "1"
+      duration: "1m"
+  - tier: medium
+    bound_type: io
+    set:
+      warehouses: "2"
+      threads: "2"
+      duration: "2m"

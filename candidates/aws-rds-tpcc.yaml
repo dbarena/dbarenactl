@@ -1,0 +1,128 @@
+# Sweep manifest for `dbarenactl run --candidate=candidates/aws-rds-tpcc.yaml`.
+#
+# instance_type is the load driver's own EC2 instance type (independent of
+# project_size), set explicitly on every test point: c8gd.xlarge through xlarge, then
+# c8gd.2xlarge/4xlarge/8xlarge matching project_size at 2xlarge/4xlarge/8xlarge.
+provider: aws/rds
+workload: tpcc
+scenario_path: ../../benchctl/scenarios/rds-tpcc-tiers.yaml
+test_points:
+  # small: db.t4g.small, 20 GB / 3,000 IOPS (default, gp3 floor)
+  - tier: small
+    bound_type: io
+    set:
+      project_size: small
+      warehouses: "80"
+      threads: "1,2,4,8,12"
+      instance_type: c8gd.xlarge
+  - tier: small
+    bound_type: compute
+    set:
+      project_size: small
+      warehouses: "14"
+      threads: "1,2,4,8,12"
+      instance_type: c8gd.xlarge
+  # medium: db.t4g.medium, 32 GB / 3,000 IOPS (default, gp3 floor)
+  - tier: medium
+    bound_type: io
+    set:
+      project_size: medium
+      warehouses: "160"
+      threads: "1,2,4,8,12"
+      instance_type: c8gd.xlarge
+  - tier: medium
+    bound_type: compute
+    set:
+      project_size: medium
+      warehouses: "28"
+      threads: "1,2,4,8,12"
+      instance_type: c8gd.xlarge
+  # large: db.m6g.large, 64 GB / 3,000 IOPS
+  - tier: large
+    bound_type: io
+    set:
+      project_size: large
+      warehouses: "320"
+      threads: "1,2,4,8,12"
+      instance_type: c8gd.xlarge
+  - tier: large
+    bound_type: compute
+    set:
+      project_size: large
+      warehouses: "56"
+      threads: "1,2,4,8,12"
+      instance_type: c8gd.xlarge
+  # xlarge: db.m6g.xlarge. IO-bound explicitly crosses the 400 GiB threshold
+  # to unlock 12,000 IOPS (matching Supabase's floor at that IOPS level, see
+  # candidates/supabase.yaml); compute-bound stays at the 128 GB/3,000 IOPS
+  # default since it isn't disk-bound making this option cheaper.
+  - tier: xlarge
+    bound_type: io
+    set:
+      project_size: xlarge
+      warehouses: "640"
+      disk_size_gb: "400"
+      disk_iops: "12000"
+      threads: "1,2,4,8,16,24"
+      instance_type: c8gd.xlarge
+  - tier: xlarge
+    bound_type: compute
+    set:
+      project_size: xlarge
+      warehouses: "112"
+      threads: "1,2,4,8,16,24"
+      instance_type: c8gd.xlarge
+  # 2xlarge: db.m6g.2xlarge. Default allocated storage (256 GB) is still
+  # below the 400 GiB custom-IOPS threshold, so IO-bound crosses it the same
+  # way xlarge does, to unlock the documented 12,000 IOPS baseline.
+  # Compute-bound stays at the 256 GB default since it isn't disk-bound.
+  - tier: 2xlarge
+    bound_type: io
+    set:
+      project_size: 2xlarge
+      warehouses: "1280"
+      disk_size_gb: "400"
+      disk_iops: "12000"
+      threads: "1,2,4,8,16,32,48"
+      instance_type: c8gd.2xlarge
+  - tier: 2xlarge
+    bound_type: compute
+    set:
+      project_size: 2xlarge
+      warehouses: "224"
+      threads: "1,2,4,8,16,32,48"
+      instance_type: c8gd.2xlarge
+  # 4xlarge: db.m6g.4xlarge. Default allocated storage (512 GB) is already
+  # >= the 400 GiB threshold, so the size_map's 20,000 IOPS applies with no
+  # override needed on either row.
+  - tier: 4xlarge
+    bound_type: io
+    set:
+      project_size: 4xlarge
+      warehouses: "2560"
+      threads: "1,2,4,8,16,32,64,96"
+      instance_type: c8gd.4xlarge
+  - tier: 4xlarge
+    bound_type: compute
+    set:
+      project_size: 4xlarge
+      warehouses: "448"
+      threads: "1,2,4,8,16,32,64,96"
+      instance_type: c8gd.4xlarge
+  # 8xlarge: db.m6g.8xlarge. Default allocated storage (1024 GB) is already
+  # >= the 400 GiB threshold, so the size_map's 40,000 IOPS applies with no
+  # override needed on either row.
+  - tier: 8xlarge
+    bound_type: io
+    set:
+      project_size: 8xlarge
+      warehouses: "5120"
+      threads: "1,2,4,8,16,32,64,128,192"
+      instance_type: c8gd.8xlarge
+  - tier: 8xlarge
+    bound_type: compute
+    set:
+      project_size: 8xlarge
+      warehouses: "896"
+      threads: "1,2,4,8,16,32,64,128,192"
+      instance_type: c8gd.8xlarge

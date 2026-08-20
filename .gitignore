@@ -1,0 +1,20 @@
+/dbarenactl
+/fakebenchctl
+/bin/
+
+# macOS
+.DS_Store
+
+# vim swap files
+*.swp
+*.swo
+
+# Go
+*.test
+*.out
+/vendor/
+
+# Claude Code — runtime/user-specific files
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/memory/

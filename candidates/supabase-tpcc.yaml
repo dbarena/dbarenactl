@@ -1,0 +1,212 @@
+# Sweep manifest for `dbarenactl run --candidate=candidates/supabase-tpcc.yaml`.
+#
+# supabase_org_id is a required scenario input (your Supabase org, since a run
+# creates a real, billed production project in it) with no sensible default.
+#
+# Supply with `dbarenactl run --candidate=candidates/supabase-tpcc.yaml --set supabase_org_id=<your-org-id>`
+#
+# Unlike RDS, Supabase's disk has no automatic per-tier default (every
+# project starts at a flat 8 GB / 3,000 IOPS / 125 MB/s regardless of tier
+# so disk_size_gb/disk_iops are set explicitly on every test point here.
+#
+# instance_type is the load driver's own EC2 instance type (independent of
+# project_size).
+provider: supabase
+workload: tpcc
+scenario_path: ../../benchctl/scenarios/supabase-tpcc-tiers.yaml
+test_points:
+  # small: documented IOPS baseline (1,000) is below gp3's 3,000 floor, so
+  # this and RDS's small both land on the same achieved 20 GB / 3,000 IOPS
+  - tier: small
+    bound_type: io
+    set:
+      supabase_org_id: "{{ params.supabase_org_id }}"
+      project_size: small
+      warehouses: "80"
+      disk_size_gb: "20"
+      disk_iops: "3000"
+      disk_type: "gp3"
+      threads: "1,2,4,8,12"
+      instance_type: c8gd.xlarge
+  - tier: small
+    bound_type: compute
+    set:
+      supabase_org_id: "{{ params.supabase_org_id }}"
+      project_size: small
+      warehouses: "14"
+      disk_size_gb: "20"
+      disk_iops: "3000"
+      threads: "1,2,4,8,12"
+      instance_type: c8gd.xlarge
+  # medium: documented baseline (2,000) is also below the gp3 floor -- same
+  # "matched (only achievable)" situation as small.
+  - tier: medium
+    bound_type: io
+    set:
+      supabase_org_id: "{{ params.supabase_org_id }}"
+      project_size: medium
+      warehouses: "160"
+      disk_size_gb: "32"
+      disk_iops: "3000"
+      disk_type: "gp3"
+      threads: "1,2,4,8,12"
+      instance_type: c8gd.xlarge
+  - tier: medium
+    bound_type: compute
+    set:
+      supabase_org_id: "{{ params.supabase_org_id }}"
+      project_size: medium
+      warehouses: "28"
+      disk_size_gb: "32"
+      disk_iops: "3000"
+      threads: "1,2,4,8,12"
+      instance_type: c8gd.xlarge
+  # large: the only tier with two published IO-bound variants.
+  # own-default requests Supabase's documented Large baseline 
+  # (3,600 IOPS / 79 MB/s), but 79 MB/s is below gp3's actual minimum 
+  # throughput (125), so disk_throughput_mibps is corrected up to that 
+  # floor and IOPS is left at the documented value.
+  # 
+  # matched-to-rds instead gives Supabase the exact same disk performance RDS
+  # gets at this tier (3,000 IOPS / 125 MB/s, RDS's own gp3 floor), isolating
+  # the IOPS difference from the platform/hardware comparison.
+  - tier: large
+    bound_type: io
+    variant: own-default
+    set:
+      supabase_org_id: "{{ params.supabase_org_id }}"
+      project_size: large
+      warehouses: "320"
+      disk_size_gb: "64"
+      disk_iops: "3600"
+      disk_throughput_mibps: "125"
+      disk_type: "gp3"
+      threads: "1,2,4,8,12"
+      instance_type: c8gd.xlarge
+  - tier: large
+    bound_type: io
+    variant: matched-to-rds
+    set:
+      supabase_org_id: "{{ params.supabase_org_id }}"
+      project_size: large
+      warehouses: "320"
+      disk_size_gb: "64"
+      disk_iops: "3000"
+      disk_type: "gp3"
+      threads: "1,2,4,8,12"
+      instance_type: c8gd.xlarge
+  - tier: large
+    bound_type: compute
+    set:
+      supabase_org_id: "{{ params.supabase_org_id }}"
+      project_size: large
+      warehouses: "56"
+      disk_size_gb: "64"
+      disk_iops: "3000"
+      threads: "1,2,4,8,12"
+      instance_type: c8gd.xlarge
+  # xlarge: IO-bound matches RDS's 12,000 IOPS floor at 400 GiB (the closest
+  # achievable value to Supabase's own documented 6,000 baseline, since RDS's
+  # gp3 step function provides no valid IOPS between 3,000 and 12,000).
+  # Compute-bound uses a much smaller disk (20 GB vs IO-bound's 128) since the
+  # smaller in-cache dataset doesn't need it.
+  - tier: xlarge
+    bound_type: io
+    set:
+      supabase_org_id: "{{ params.supabase_org_id }}"
+      project_size: xlarge
+      warehouses: "640"
+      disk_size_gb: "128"
+      disk_iops: "12000"
+      disk_type: "gp3"
+      threads: "1,2,4,8,16,24"
+      instance_type: c8gd.xlarge
+  - tier: xlarge
+    bound_type: compute
+    set:
+      supabase_org_id: "{{ params.supabase_org_id }}"
+      project_size: xlarge
+      warehouses: "112"
+      disk_size_gb: "20"
+      disk_iops: "3000"
+      threads: "1,2,4,8,16,24"
+      instance_type: c8gd.xlarge
+  # 2xlarge: own tier disk size (256 GB, well below RDS's 400 GiB
+  # custom-IOPS threshold, but Supabase's IOPS isn't gated by disk size the
+  # way RDS's is) with disk_iops matched to the documented 2XL baseline.
+  # Compute-bound uses a right-sized disk (40 GB) for its ~22.4 GB 
+  # dataset, continuing xlarge's headroom ratio rather than reusing the 
+  # full IO-bound disk size.
+  - tier: 2xlarge
+    bound_type: io
+    set:
+      supabase_org_id: "{{ params.supabase_org_id }}"
+      project_size: 2xlarge
+      warehouses: "1280"
+      disk_size_gb: "256"
+      disk_iops: "12000"
+      disk_type: "gp3"
+      threads: "1,2,4,8,16,32,48"
+      instance_type: c8gd.2xlarge
+  - tier: 2xlarge
+    bound_type: compute
+    set:
+      supabase_org_id: "{{ params.supabase_org_id }}"
+      project_size: 2xlarge
+      warehouses: "224"
+      disk_size_gb: "40"
+      disk_iops: "3000"
+      threads: "1,2,4,8,16,32,48"
+      instance_type: c8gd.2xlarge
+  # 4xlarge: own tier disk size (512 GB) with disk_iops matched to the
+  # documented 4XL baseline. Compute-bound uses a right-sized disk (80 GB)
+  # for its ~44.8 GB dataset.
+  # disk_type: use io2 as this tier's documented IOPS (20000) exceeds Supabase's
+  # gp3 cap of min(500 IOPS/GB, 16000); io2 supports up to 1000 IOPS/GB.
+  - tier: 4xlarge
+    bound_type: io
+    set:
+      supabase_org_id: "{{ params.supabase_org_id }}"
+      project_size: 4xlarge
+      warehouses: "2560"
+      disk_size_gb: "512"
+      disk_iops: "20000"
+      disk_type: "io2"
+      threads: "1,2,4,8,16,32,64,96"
+      instance_type: c8gd.4xlarge
+  - tier: 4xlarge
+    bound_type: compute
+    set:
+      supabase_org_id: "{{ params.supabase_org_id }}"
+      project_size: 4xlarge
+      warehouses: "448"
+      disk_size_gb: "80"
+      disk_iops: "3000"
+      threads: "1,2,4,8,16,32,64,96"
+      instance_type: c8gd.4xlarge
+  # 8xlarge: own tier disk size (1024 GB) with disk_iops matched to the
+  # documented 8XL baseline. Compute-bound uses a right-sized disk (160 GB)
+  # for its ~89.6 GB dataset.
+  # disk_type: use io2 as this tier's documented IOPS (40000) exceeds Supabase's
+  # gp3 cap of min(500 IOPS/GB, 16000); io2 supports up to 1000 IOPS/GB.
+  - tier: 8xlarge
+    bound_type: io
+    set:
+      supabase_org_id: "{{ params.supabase_org_id }}"
+      project_size: 8xlarge
+      warehouses: "5120"
+      disk_size_gb: "1024"
+      disk_iops: "40000"
+      disk_type: "io2"
+      threads: "1,2,4,8,16,32,64,128,192"
+      instance_type: c8gd.8xlarge
+  - tier: 8xlarge
+    bound_type: compute
+    set:
+      supabase_org_id: "{{ params.supabase_org_id }}"
+      project_size: 8xlarge
+      warehouses: "896"
+      disk_size_gb: "160"
+      disk_iops: "3000"
+      threads: "1,2,4,8,16,32,64,128,192"
+      instance_type: c8gd.8xlarge

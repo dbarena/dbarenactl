@@ -1,0 +1,59 @@
+[tools]
+go = "latest"
+
+[tasks.build]
+description = "Build dbarenactl for the current platform"
+run = """
+VERSION=dev+$(date +%Y%m%d)-$(git rev-parse --short HEAD)
+CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o dbarenactl ./cmd/dbarenactl/
+"""
+
+[tasks.test]
+description = "Run all tests"
+run = "go test ./..."
+
+[tasks."test-e2e"]
+description = "Run end-to-end tests against a fake benchctl binary (slower; opt-in)"
+run = "go test -tags e2e ./e2e/..."
+
+[tasks.build-linux]
+description = "Cross-compile dbarenactl for Linux (amd64 and arm64) into ./bin/"
+run = """
+mkdir -p bin
+VERSION=dev+$(date +%Y%m%d)-$(git rev-parse --short HEAD)
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X main.version=${VERSION}" -o bin/dbarenactl-linux-amd64 ./cmd/dbarenactl/
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "-s -w -X main.version=${VERSION}" -o bin/dbarenactl-linux-arm64 ./cmd/dbarenactl/
+"""
+
+[tasks.build-darwin]
+description = "Cross-compile dbarenactl for macOS (amd64 and arm64) into ./bin/"
+run = """
+mkdir -p bin
+VERSION=dev+$(date +%Y%m%d)-$(git rev-parse --short HEAD)
+CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w -X main.version=${VERSION}" -o bin/dbarenactl-darwin-amd64 ./cmd/dbarenactl/
+CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w -X main.version=${VERSION}" -o bin/dbarenactl-darwin-arm64 ./cmd/dbarenactl/
+"""
+
+[tasks.build-all]
+description = "Cross-compile dbarenactl for all supported platforms into ./bin/"
+depends = ["build-linux", "build-darwin"]
+
+[tasks.lint]
+description = "Run gofmt -l and go vet"
+run = """
+out=$(gofmt -l .)
+if [ -n "$out" ]; then
+  echo "gofmt: the following files need formatting:"
+  echo "$out"
+  exit 1
+fi
+go vet ./...
+"""
+
+[tasks.format]
+description = "Format all Go source files with gofmt"
+run = "gofmt -w ."
+
+[tasks.version]
+description = "Print the current dev version string"
+run = "echo dev+$(date +%Y%m%d)-$(git rev-parse --short HEAD)"

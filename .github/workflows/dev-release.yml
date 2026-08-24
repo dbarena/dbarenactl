@@ -1,0 +1,48 @@
+name: Dev Release
+
+on:
+  push:
+    branches: [main]
+
+# Prevent races when multiple PRs merge in quick succession: only the latest run
+# updates the rolling dev release; any in-progress run for an older commit is cancelled.
+concurrency:
+  group: dev-release
+  cancel-in-progress: true
+
+jobs:
+  dev-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4.2.5
+
+      - name: Compute version
+        id: version
+        run: echo "version=$(mise run version 2>/dev/null)" >> "$GITHUB_OUTPUT"
+
+      - name: Build binaries
+        run: mise run build-all
+
+      - name: Compute checksums
+        run: |
+          cd bin
+          sha256sum dbarenactl-linux-amd64 dbarenactl-linux-arm64 dbarenactl-darwin-amd64 dbarenactl-darwin-arm64 > checksums.txt
+
+      - name: Update dev release
+        run: |
+          gh release delete dev --yes --cleanup-tag 2>/dev/null || true
+          gh release create dev \
+            --prerelease \
+            --title "dev (${{ steps.version.outputs.version }})" \
+            --notes "Development build: \`${{ steps.version.outputs.version }}\`" \
+            bin/dbarenactl-linux-amd64 \
+            bin/dbarenactl-linux-arm64 \
+            bin/dbarenactl-darwin-amd64 \
+            bin/dbarenactl-darwin-arm64 \
+            bin/checksums.txt
+        env:
+          GH_TOKEN: ${{ github.token }}

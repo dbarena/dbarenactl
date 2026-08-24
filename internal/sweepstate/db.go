@@ -1,0 +1,94 @@
+package sweepstate
+
+import (
+	"database/sql"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	_ "modernc.org/sqlite"
+)
+
+const schema = `
+CREATE TABLE IF NOT EXISTS sweeps (
+	id           TEXT PRIMARY KEY,
+	provider     TEXT NOT NULL,
+	workload     TEXT NOT NULL,
+	params_json  TEXT NOT NULL,
+	status       TEXT NOT NULL,
+	error_action TEXT NOT NULL DEFAULT '',
+	error_target TEXT NOT NULL DEFAULT '',
+	error_detail TEXT NOT NULL DEFAULT '',
+	error_at     DATETIME,
+	created_at   DATETIME NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS test_points (
+	id                TEXT PRIMARY KEY,
+	sweep_id          TEXT NOT NULL REFERENCES sweeps(id),
+	tier              TEXT NOT NULL,
+	workload          TEXT NOT NULL,
+	scenario          TEXT NOT NULL,
+	bound_type        TEXT NOT NULL,
+	variant           TEXT NOT NULL DEFAULT '',
+	set_json          TEXT NOT NULL DEFAULT '{}',
+	successes_needed  INTEGER NOT NULL,
+	successes_count   INTEGER NOT NULL DEFAULT 0,
+	failures_count    INTEGER NOT NULL DEFAULT 0,
+	failure_budget    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_test_points_sweep ON test_points(sweep_id);
+
+CREATE TABLE IF NOT EXISTS runs (
+	run_id             TEXT PRIMARY KEY,
+	test_point_id      TEXT NOT NULL REFERENCES test_points(id),
+	iteration_attempt  INTEGER NOT NULL,
+	status             TEXT NOT NULL,
+	outcome            TEXT NOT NULL DEFAULT '',
+	local_artifact_dir TEXT NOT NULL DEFAULT '',
+	fetch_attempts     INTEGER NOT NULL DEFAULT 0,
+	created_at         DATETIME NOT NULL,
+	updated_at         DATETIME NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_runs_test_point ON runs(test_point_id);
+`
+
+// Store is dbarenactl's local SQLite-backed state store.
+type Store struct {
+	db *sql.DB
+}
+
+// Open opens (creating if needed) the SQLite database at path and ensures
+// its schema exists. WAL mode is enabled so concurrent readers (e.g.
+// `dbarenactl status` while a `dbarenactl run` is active) don't block the writer.
+func Open(path string) (*Store, error) {
+	if dir := filepath.Dir(path); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("sweepstate: mkdir %s: %w", dir, err)
+		}
+	}
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		return nil, fmt.Errorf("sweepstate: open %s: %w", path, err)
+	}
+	// SQLite only allows one writer at a time regardless of driver-level
+	// pooling; forcing a single connection avoids "database is locked"
+	// errors from this process racing itself across goroutines.
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL;`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("sweepstate: enable WAL: %w", err)
+	}
+	if _, err := db.Exec(`PRAGMA foreign_keys=ON;`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("sweepstate: enable foreign keys: %w", err)
+	}
+	if _, err := db.Exec(schema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("sweepstate: create schema: %w", err)
+	}
+	return &Store{db: db}, nil
+}
+
+// Close closes the underlying database connection.
+func (s *Store) Close() error { return s.db.Close() }

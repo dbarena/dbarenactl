@@ -28,6 +28,7 @@ func init() {
 	rootCmd.AddCommand(runCmd)
 	rootCmd.AddCommand(resumeCmd)
 	rootCmd.AddCommand(statusCmd)
+	rootCmd.AddCommand(deleteCmd)
 	rootCmd.AddCommand(resultsCmd)
 	rootCmd.AddCommand(pricingCmd)
 }

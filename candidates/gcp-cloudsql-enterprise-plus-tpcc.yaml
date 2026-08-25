@@ -1,0 +1,73 @@
+# Sweep manifest for `dbarenactl run --candidate=candidates/gcp-cloudsql-enterprise-plus-tpcc.yaml`.
+#
+# A separate candidate from candidates/gcp-cloudsql-tpcc.yaml (Enterprise
+# edition), not a tier of it: deployments/gcp-cloudsql-enterprise-plus/postgres
+# provisions a single, fixed shape (db-perf-optimized-N-2, 2 vCPU/16GB,
+# PD-SSD, Data Cache on) rather than a project_size-selected tier. PD-SSD,
+# not HYPERDISK_BALANCED like the base Enterprise candidate's N4 shapes: a
+# real apply confirmed db-perf-optimized-N-2 rejects HYPERDISK_BALANCED
+# outright ("HYPERDISK_BALANCED disk type is not supported for tier
+# db-perf-optimized-N-2") despite the Cloud Billing Catalog listing Hyperdisk
+# SKUs under "Enterprise Plus Standard Storage" generally -- those evidently
+# price some other Enterprise Plus shape/series, not this one. See
+# deployments/gcp-cloudsql-enterprise-plus/postgres/main.tf's comment.
+#
+# Why this shape and no others: Enterprise Plus's N-series only comes in
+# predefined db-perf-optimized-N-<vCPU> shapes at a fixed 1vCPU:8GB ratio.
+# db-perf-optimized-N-2 is the smallest available -- its 16GB RAM matches
+# Supabase's XL tier exactly, the *only* Supabase tier whose RAM target lands
+# on an achievable Enterprise Plus shape at all (Small/Medium/Large's 2/4/8GB
+# targets are all below Enterprise Plus's floor). vCPU does not match (2 here
+# vs. Supabase XL's 4 vCPU) -- warehouses below are still XL's RAM-driven
+# values (40 x 16GB RAM = 640 io-bound / ~7.5x16GB = 120 compute-bound), but
+# threads use this shape's actual vCPU count (6 x 2 = 12), not XL's 6 x 4 = 24.
+# Compare these two test points against Supabase's XL row with that vCPU
+# mismatch disclosed -- this is not a new "xlarge" tier of its own.
+#
+# Data Cache is pinned on, not offered as an on/off pair here (a single fixed
+# configuration per direction from Daniel) -- so this candidate cannot by
+# itself separate "N2 hardware" from "Data Cache" as the source of any
+# throughput delta versus Enterprise edition. Treat that as a known
+# limitation of this specific sweep, not an oversight: isolating the two
+# would need a second, N2-without-Data-Cache variant, which this candidate
+# deliberately does not include.
+#
+# Cost check before trusting any tpmC/$ result here: on-demand pricing
+# (region us-central1, fetched live via scripts/fetch-gcp-cloudsql-pricing.sh,
+# not third-party estimates) puts this shape at roughly:
+#   compute:    2 x $0.0537/vCPU-hr + 16 x $0.0091/GiB-hr        = $0.2530/hr
+#   Data Cache: 375 GiB (db-perf-optimized-N-2's documented size)
+#               x $0.16/GiB-mo / 730                             = $0.0822/hr
+#   disk:       128 GiB x $0.17/GiB-mo / 730                     = $0.0298/hr
+#   total                                                       ~= $0.365/hr
+# against Supabase XL's ~$0.308/hr (compute + disk, from
+# docs/supabase-vs-rds-benchmark.md's cost table methodology) -- roughly 18%
+# more expensive. This shape needs a meaningfully higher io-bound tpmC than
+# Supabase XL just to tie on tpmC/$, not merely match or edge it out on raw
+# throughput. Re-run the pricing script before publishing any cost claim --
+# on-demand prices move.
+#
+# project_id has a sensible default (resolved from GOOGLE_CLOUD_PROJECT /
+# gcloud's active config), so no --set override is needed to run this.
+provider: gcp/cloudsql-enterprise-plus
+workload: tpcc
+scenario_path: ../../benchctl/scenarios/gcp-cloudsql-enterprise-plus-tpcc.yaml
+test_points:
+  # db-perf-optimized-N-2 (2 vCPU / 16 GB), 128 GB disk, Data Cache on.
+  #
+  # instance_type is the load driver's own GCE machine type -- set
+  # explicitly to c4a-standard-4, the Load Generator Machine table's XL row,
+  # since this fixed shape is matched to Supabase's XL tier (see the header
+  # comment above).
+  - tier: xl-enterprise-plus
+    bound_type: io
+    set:
+      warehouses: "640"
+      threads: "1,2,4,8,12"
+      instance_type: c4a-standard-4
+  - tier: xl-enterprise-plus
+    bound_type: compute
+    set:
+      warehouses: "112"
+      threads: "1,2,4,8,12"
+      instance_type: c4a-standard-4

@@ -156,6 +156,38 @@ func (s *Store) ResetSweep(sweepID string) error {
 	return tx.Commit()
 }
 
+// DeleteSweep permanently removes a sweep and all its test points and runs
+// from the database, regardless of its current status. Callers must tear
+// down any live infra for its non-terminal runs first (see
+// ListNonTerminalRuns) -- like ResetSweep/RestartSweep, this is a pure DB
+// operation with no knowledge of live infra.
+func (s *Store) DeleteSweep(sweepID string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("sweepstate: begin delete sweep %s: %w", sweepID, err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	var status string
+	if err := tx.QueryRow(`SELECT status FROM sweeps WHERE id = ?`, sweepID).Scan(&status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("sweepstate: delete sweep %s: %w", sweepID, err)
+	}
+
+	if _, err := tx.Exec(`DELETE FROM runs WHERE test_point_id IN (SELECT id FROM test_points WHERE sweep_id = ?)`, sweepID); err != nil {
+		return fmt.Errorf("sweepstate: delete sweep %s: delete runs: %w", sweepID, err)
+	}
+	if _, err := tx.Exec(`DELETE FROM test_points WHERE sweep_id = ?`, sweepID); err != nil {
+		return fmt.Errorf("sweepstate: delete sweep %s: delete test points: %w", sweepID, err)
+	}
+	if _, err := tx.Exec(`DELETE FROM sweeps WHERE id = ?`, sweepID); err != nil {
+		return fmt.Errorf("sweepstate: delete sweep %s: delete sweep: %w", sweepID, err)
+	}
+	return tx.Commit()
+}
+
 // ExtendExhaustedTestPoints gives every currently-exhausted test point in
 // the sweep (successes still short of target, failures at or past budget --
 // there can be more than one, since Step only ever records the last one it

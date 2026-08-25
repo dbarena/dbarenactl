@@ -231,9 +231,9 @@ type runResult struct {
 }
 
 // runDbarenactl runs the built dbarenactl binary as a real subprocess.
-// stdin is used for resume's continue/restart prompt; pass "" when not
-// needed.
-// Every subcommand this suite drives (run/resume/status) accepts
+// stdin is used for resume's continue/restart prompt and delete's
+// confirmation prompt; pass "" when not needed.
+// Every subcommand this suite drives (run/resume/status/delete) accepts
 // --benchctl-bin; runDbarenactl always points it at the fake so callers
 // don't have to repeat it.
 func runDbarenactl(t *testing.T, env map[string]string, stdin string, args ...string) runResult {

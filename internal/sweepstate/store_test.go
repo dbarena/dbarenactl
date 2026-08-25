@@ -186,6 +186,57 @@ func TestResetSweep_NotFound(t *testing.T) {
 	}
 }
 
+func TestDeleteSweep_RemovesEverythingWhateverTheStatus(t *testing.T) {
+	statuses := []struct {
+		name string
+		set  func(t *testing.T, st *Store)
+	}{
+		{"running", func(t *testing.T, st *Store) {}},
+		{"stopped", func(t *testing.T, st *Store) {
+			if err := st.RecordError("sweep-1", "teardown", "run-1", "environment still up"); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"completed", func(t *testing.T, st *Store) {
+			if err := st.MarkCompleted("sweep-1"); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, tc := range statuses {
+		t.Run(tc.name, func(t *testing.T) {
+			st := openTestStore(t)
+			seedSweep(t, st, "sweep-1")
+			tp := seedTestPoint(t, st, "sweep-1", "sweep-1-small-io", 1, 1)
+			if err := st.CreateRun(&Run{RunID: "run-1", TestPointID: tp.ID, IterationAttempt: 1}); err != nil {
+				t.Fatal(err)
+			}
+			tc.set(t, st)
+
+			if err := st.DeleteSweep("sweep-1"); err != nil {
+				t.Fatalf("DeleteSweep: %v", err)
+			}
+
+			if _, err := st.GetSweep("sweep-1"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("GetSweep after delete = %v, want ErrNotFound", err)
+			}
+			if tps, err := st.ListTestPoints("sweep-1"); err != nil || len(tps) != 0 {
+				t.Errorf("ListTestPoints after delete = %v, %v", tps, err)
+			}
+			if _, err := st.GetRun("run-1"); !errors.Is(err, ErrNotFound) {
+				t.Errorf("GetRun after delete = %v, want ErrNotFound", err)
+			}
+		})
+	}
+}
+
+func TestDeleteSweep_NotFound(t *testing.T) {
+	st := openTestStore(t)
+	if err := st.DeleteSweep("nope"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
 // finalizeN creates and finalizes n runs against tp with the given outcome,
 // each bumping successes_count or failures_count by one.
 func finalizeN(t *testing.T, st *Store, tp *TestPoint, outcome string, n int) {

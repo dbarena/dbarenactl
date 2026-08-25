@@ -152,8 +152,11 @@ func runRun(cmd *cobra.Command, _ []string) error {
 		}
 	case err == nil:
 		return fmt.Errorf(
-			"an incomplete sweep %s already exists for this provider and parameter set -- run `dbarenactl resume %s` to continue it (change a flag or the manifest to start a genuinely different sweep)",
-			sweepID, sweepID)
+			"an incomplete sweep %s already exists for this provider and parameter set. Options:\n"+
+				"  - `dbarenactl resume %s` to continue it\n"+
+				"  - `dbarenactl delete %s` to delete it and start over\n"+
+				"  - change a flag or the manifest to start a genuinely different sweep",
+			sweepID, sweepID, sweepID)
 	case err != nil && !errors.Is(err, sweepstate.ErrNotFound):
 		return err
 	}

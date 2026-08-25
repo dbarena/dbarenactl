@@ -68,6 +68,9 @@ needs successes.
 
 # Continue a sweep that stopped (e.g. after exhausting its failure budget)
 ./dbarenactl resume <sweep-id>
+
+# Delete an obsolete sweep (also tears down infrastructure)
+./dbarenactl delete <sweep-id>
 ```
 
 If a sweep stops because a test point ran out of retries, `resume` asks whether to keep
@@ -83,6 +86,7 @@ infrastructure left running.
 | `dbarenactl run --candidate <manifest> --dry-run` | Preview the benchctl invocations without running anything |
 | `dbarenactl resume [sweep-id]` | Continue an incomplete sweep, or list incomplete sweeps if no id is given |
 | `dbarenactl status [sweep-id]` | Show sweep progress, or list incomplete sweeps if no id is given |
+| `dbarenactl delete <sweep-id>` | Permanently delete a sweep's state and tear down associated infrastructure |
 | `dbarenactl results <sweep-id>` | Assemble a results file from a sweep's artifacts (not yet implemented) |
 | `dbarenactl pricing fetch\|set <provider>` | Record a provider pricing snapshot (not yet implemented) |
 
@@ -90,6 +94,9 @@ Common `run` flags: `--max-concurrency` (default 1), `--iterations` (successful 
 required per test point, default 3), `--on-workload-failure retry|fail-teardown`, `--set
 key=value` to override manifest parameters, `--benchctl-bin` to point at a non-default
 `benchctl` binary.
+
+Common `delete` flags: `--yes`/`-y` to skip the confirmation prompt, `--benchctl-bin` to
+point at a non-default `benchctl` binary.
 
 ## Development
 

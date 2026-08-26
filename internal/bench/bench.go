@@ -139,10 +139,13 @@ type Client struct {
 	// absolute. Defaults to "benchctl".
 	BinPath string
 	// LogDir, if set, causes every "action" invocation (LaunchAsync, Fetch,
-	// Teardown -- not the frequent periodic Status polls) to be appended to
-	// <LogDir>/<runID>.log, so concurrently-running environments never mix
-	// their output and a failure's full benchctl output can be inspected
-	// without dumping it into the terminal. Empty means logging is disabled.
+	// Teardown -- not the frequent periodic Status polls) to stream its
+	// combined stdout/stderr live into <LogDir>/<runID>.log as the
+	// subprocess produces it, so concurrently-running environments never
+	// mix their output, a failure's full benchctl output can be inspected
+	// without dumping it into the terminal, and `tail -f` can follow a
+	// long-running invocation (e.g. bootstrap) while it's still in flight.
+	// Empty means logging is disabled.
 	LogDir string
 }
 
@@ -206,18 +209,22 @@ func (c *Client) run(ctx context.Context, args ...string) (stdout, stderr []byte
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
-	err = cmd.Run()
+	err = classifyErr(cmd.Run(), ctx)
+	return outBuf.Bytes(), errBuf.Bytes(), err
+}
+
+// classifyErr distinguishes "the benchctl process never started" (missing
+// binary, no execute permission) from "benchctl ran and exited non-zero" --
+// the former is deterministic and will fail identically on every retry,
+// unlike a real domain-level error from benchctl itself.
+func classifyErr(err error, ctx context.Context) error {
 	if err != nil && ctx.Err() == nil {
-		// Distinguish "the benchctl process never started" (missing binary,
-		// no execute permission) from "benchctl ran and exited non-zero" --
-		// the former is deterministic and will fail identically on every
-		// retry, unlike a real domain-level error from benchctl itself.
 		var execErr *exec.Error
 		if errors.As(err, &execErr) || errors.Is(err, fs.ErrPermission) || errors.Is(err, fs.ErrNotExist) {
 			err = fmt.Errorf("%w: %v", ErrBenchctlUnusable, err)
 		}
 	}
-	return outBuf.Bytes(), errBuf.Bytes(), err
+	return err
 }
 
 // errSuffix returns the text appended after the wrapped error in an action
@@ -231,43 +238,48 @@ func (c *Client) errSuffix(runID string, stderr []byte) string {
 	return fmt.Sprintf(": %s", stderr)
 }
 
-// runLogged behaves like run, but -- when LogDir is configured -- also
-// appends the invocation to <LogDir>/<runID>.log. Used only by the "action"
-// methods (LaunchAsync, Fetch, Teardown); Status polls too frequently to be
-// worth logging and calls run directly.
+// runLogged behaves like run, but -- when LogDir is configured -- opens
+// <LogDir>/<runID>.log up front and wires the subprocess's stdout/stderr
+// directly to it, so the file exists and streams live from the moment the
+// subprocess starts (rather than being written only after it exits). Used
+// only by the "action" methods (LaunchAsync, Fetch, Teardown); Status polls
+// too frequently to be worth logging and calls run directly.
 func (c *Client) runLogged(ctx context.Context, runID string, args ...string) (stdout, stderr []byte, err error) {
-	stdout, stderr, err = c.run(ctx, args...)
-	if c.LogDir != "" {
-		if logErr := c.appendLog(runID, args, stdout, stderr, err); logErr != nil {
-			fmt.Fprintf(os.Stderr, "bench: warning: could not write log for %s: %v\n", runID, logErr)
-		}
+	if c.LogDir == "" {
+		return c.run(ctx, args...)
 	}
-	return stdout, stderr, err
+
+	logFile, openErr := c.openLogFile(runID, args)
+	if openErr != nil {
+		fmt.Fprintf(os.Stderr, "bench: warning: could not open log file for %s: %v\n", runID, openErr)
+		return c.run(ctx, args...)
+	}
+	defer logFile.Close()
+
+	cmd := exec.CommandContext(ctx, c.BinPath, args...)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	err = classifyErr(cmd.Run(), ctx)
+	if err != nil {
+		fmt.Fprintf(logFile, "--- error: %v ---\n", err)
+	}
+	return nil, nil, err
 }
 
-// appendLog records one invocation's full output in runID's log file,
-// creating the log directory and file as needed.
-func (c *Client) appendLog(runID string, args []string, stdout, stderr []byte, cmdErr error) error {
+// openLogFile creates c.LogDir if needed, opens/creates
+// <LogDir>/<runID>.log for appending, and writes a header recording the
+// invocation before returning it -- ready to be wired up as the
+// subprocess's stdout/stderr directly.
+func (c *Client) openLogFile(runID string, args []string) (*os.File, error) {
 	if err := os.MkdirAll(c.LogDir, 0o755); err != nil {
-		return err
+		return nil, err
 	}
 	f, err := os.OpenFile(c.logPath(runID), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer f.Close()
-
 	fmt.Fprintf(f, "=== %s benchctl %s\n", time.Now().UTC().Format(time.RFC3339), strings.Join(args, " "))
-	if len(stdout) > 0 {
-		fmt.Fprintf(f, "--- stdout ---\n%s\n", stdout)
-	}
-	if len(stderr) > 0 {
-		fmt.Fprintf(f, "--- stderr ---\n%s\n", stderr)
-	}
-	if cmdErr != nil {
-		fmt.Fprintf(f, "--- error: %v ---\n", cmdErr)
-	}
-	return nil
+	return f, nil
 }
 
 // logPath returns where runID's benchctl output log lives.

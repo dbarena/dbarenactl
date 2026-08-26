@@ -816,6 +816,56 @@ func TestStep_WaitingRemoteTerminatedWithoutCompleting_FinalizesAsFailure(t *tes
 	}
 }
 
+func TestStep_NeedsResultsPullTerminated_FinalizesAsFailure(t *testing.T) {
+	s, fb, st := newTestScheduler(t)
+	// Failure budget wider than 1 so finalizing this one failure doesn't
+	// itself exhaust it -- this test is about the reconciliation branch
+	// itself, not the separate budget-exhausted stop-the-world path.
+	_, tp := seedSweepWithOneTestPoint(t, st, 1, 2)
+
+	if _, err := s.Step(context.Background(), "sweep-1", defaultOpts()); err != nil {
+		t.Fatal(err)
+	}
+	runID := fb.launchCalls[0]
+	completeRun(fb.run(runID), true)
+	if _, err := s.Step(context.Background(), "sweep-1", defaultOpts()); err != nil { // -> needs_results_pull
+		t.Fatal(err)
+	}
+
+	// Simulate a manual `benchctl teardown <run-id>` on the environment
+	// after the workload completed but before results were fetched.
+	now := time.Now().UTC()
+	fb.run(runID).state.TerminatedAt = &now
+
+	res, err := s.Step(context.Background(), "sweep-1", defaultOpts())
+	if err != nil {
+		t.Fatalf("Step: %v", err)
+	}
+	if !res.Progressed {
+		t.Error("finalizing the run should count as progress")
+	}
+	if len(fb.fetchCalls) != 0 || len(fb.teardownCalls) != 0 {
+		t.Errorf("should neither fetch nor tear down an already-terminated environment: fetch=%v teardown=%v", fb.fetchCalls, fb.teardownCalls)
+	}
+	run, err := st.GetRun(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != sweepstate.RunFailed {
+		t.Errorf("run.Status = %q, want %q", run.Status, sweepstate.RunFailed)
+	}
+	if run.Outcome != "failure" {
+		t.Errorf("run.Outcome = %q, want %q", run.Outcome, "failure")
+	}
+	tpAfter, err := st.GetTestPoint(tp.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tpAfter.FailuresCount != 1 {
+		t.Errorf("FailuresCount = %d, want 1", tpAfter.FailuresCount)
+	}
+}
+
 func TestStep_RespectsMaxConcurrency(t *testing.T) {
 	s, fb, st := newTestScheduler(t)
 	sw := &sweepstate.Sweep{ID: "sweep-1", Provider: "aws/rds", ParamsJSON: "{}", CreatedAt: time.Now().UTC()}

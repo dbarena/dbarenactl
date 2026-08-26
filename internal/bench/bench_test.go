@@ -106,6 +106,45 @@ func TestLaunchAsync_WithLogDirFailure_ErrorPointsAtLogFileInsteadOfEmbeddingStd
 	}
 }
 
+func TestLaunchAsync_WithLogDirLogFileStreamsWhileSubprocessStillRunning(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "started")
+	bin := fakeBenchctl(t, `echo "provisioning..."; touch `+marker+`; sleep 5`)
+	c := New(bin)
+	c.LogDir = t.TempDir()
+
+	launchDone := make(chan error, 1)
+	go func() {
+		launchDone <- c.LaunchAsync(context.Background(), "run-1", "scenarios/x.yaml", nil)
+	}()
+
+	logPath := filepath.Join(c.LogDir, "run-1.log")
+	deadline := time.Now().Add(4 * time.Second)
+	for {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("fake benchctl never reported starting up")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// The subprocess is now sleeping, well before it exits. The log file
+	// must already exist and contain its output -- proof this isn't
+	// buffered in memory until the process finishes.
+	got, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("log file should exist while the subprocess is still running: %v", err)
+	}
+	if !strings.Contains(string(got), "provisioning...") {
+		t.Errorf("log file = %q, want it to already contain live output", got)
+	}
+
+	if err := <-launchDone; err != nil {
+		t.Fatalf("LaunchAsync: %v", err)
+	}
+}
+
 func TestStatus_WithLogDirConfigured_NeverWritesLogFile(t *testing.T) {
 	bin := fakeBenchctl(t, `cat <<'EOF'
 {"run_id":"run-1","phases":{"provision":"completed"}}

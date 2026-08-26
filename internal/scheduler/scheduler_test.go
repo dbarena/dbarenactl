@@ -203,11 +203,22 @@ func TestStep_LogsLaunchFinishAndTeardownProgress(t *testing.T) {
 	if _, err := s.Step(ctx, "sweep-1", opts); err != nil { // fetch
 		t.Fatalf("fetch step: %v", err)
 	}
+	if !strings.Contains(out.String(), runID+": fetching results") {
+		t.Errorf("output missing fetching line: %q", out.String())
+	}
 	if _, err := s.Step(ctx, "sweep-1", opts); err != nil { // teardown + finalize
 		t.Fatalf("teardown step: %v", err)
 	}
-	if !strings.Contains(out.String(), runID+": torn down -- sweep-1-small-io now 1/1 successes, 0/1 failures") {
+	tearingDownIdx := strings.Index(out.String(), runID+": tearing down")
+	tornDownIdx := strings.Index(out.String(), runID+": torn down -- sweep-1-small-io now 1/1 successes, 0/1 failures")
+	if tearingDownIdx == -1 {
+		t.Errorf("output missing tearing-down line: %q", out.String())
+	}
+	if tornDownIdx == -1 {
 		t.Errorf("output missing teardown line: %q", out.String())
+	}
+	if tearingDownIdx != -1 && tornDownIdx != -1 && tearingDownIdx > tornDownIdx {
+		t.Errorf("expected \"tearing down\" to precede \"torn down\": %q", out.String())
 	}
 }
 
@@ -374,6 +385,14 @@ func TestStep_ResumeAfterCrash_ProvisionNotCompleted_TearsDownAndRetries(t *test
 	}
 	if len(fb.launchCalls) != 1 {
 		t.Errorf("expected a fresh launch, got %v", fb.launchCalls)
+	}
+
+	out := s.Out.(*strings.Builder).String()
+	if !strings.Contains(out, orphanID+": launch left an orphaned environment; tearing down before retrying") {
+		t.Errorf("output missing orphan-teardown-starting line: %q", out)
+	}
+	if !strings.Contains(out, orphanID+": orphaned environment torn down") {
+		t.Errorf("output missing orphan-teardown-finished line: %q", out)
 	}
 }
 
@@ -697,6 +716,9 @@ func TestStep_TeardownFailure_StopsTheWorld(t *testing.T) {
 	sw, _ := st.GetSweep("sweep-1")
 	if sw.ErrorAction != ActionTeardown {
 		t.Errorf("sweep = %+v", sw)
+	}
+	if out := s.Out.(*strings.Builder).String(); !strings.Contains(out, runID+": tearing down") {
+		t.Errorf("output missing tearing-down line before the failed attempt: %q", out)
 	}
 
 	// Resuming with teardown now fixed should finalize and complete.

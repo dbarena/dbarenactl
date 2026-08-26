@@ -317,12 +317,14 @@ func (s *Scheduler) reconcileLaunching(ctx context.Context, sweepID string, run 
 	// Orphaned: local provisioning either never finished or never got
 	// handed off in time. Infra may exist -- tear it down before discarding
 	// the row so a fresh attempt gets a clean slate.
+	s.logf("%s: launch left an orphaned environment; tearing down before retrying", run.RunID)
 	if err := s.Bench.Teardown(ctx, run.RunID); err != nil {
 		if rerr := s.Store.RecordError(sweepID, ActionTeardown, run.RunID, err.Error()); rerr != nil {
 			return false, rerr
 		}
 		return false, fmt.Errorf("tear down orphaned run %s: %w", run.RunID, err)
 	}
+	s.logf("%s: orphaned environment torn down", run.RunID)
 	return true, s.Store.DeleteRun(run.RunID)
 }
 
@@ -369,6 +371,7 @@ func (s *Scheduler) reconcileWaitingRemote(ctx context.Context, sweepID string, 
 
 func (s *Scheduler) reconcileNeedsResultsPull(ctx context.Context, sweepID string, run *sweepstate.Run, opts Options) (bool, error) {
 	dest := filepath.Join(opts.ArtifactBaseDir, run.RunID)
+	s.logf("%s: fetching results", run.RunID)
 	fetchErr := s.Bench.Fetch(ctx, run.RunID, dest)
 	if fetchErr == nil {
 		if err := s.Store.SetRunArtifactDir(run.RunID, dest); err != nil {
@@ -400,6 +403,7 @@ func (s *Scheduler) reconcileNeedsResultsPull(ctx context.Context, sweepID strin
 }
 
 func (s *Scheduler) reconcileNeedsTeardown(ctx context.Context, sweepID string, run *sweepstate.Run) (bool, error) {
+	s.logf("%s: tearing down", run.RunID)
 	if err := s.Bench.Teardown(ctx, run.RunID); err != nil {
 		if rerr := s.Store.RecordError(sweepID, ActionTeardown, run.RunID, err.Error()); rerr != nil {
 			return false, rerr

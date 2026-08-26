@@ -19,7 +19,7 @@ import (
 // "don't assume it's gone, check directly".
 func TestTeardownFailure_StopsWithEnvironmentFateUnclear(t *testing.T) {
 	broken := testPointSpec{Tier: "small", BoundType: "io"}
-	manifestPath := writeManifest(t, "teardown-failure", "tpcc", []testPointSpec{broken})
+	manifestPath := writeManifest(t, "teardown-failure", []testPointSpec{broken})
 
 	env := newEnv(t, fakeConfig{
 		BootstrapDuration: "50ms",
@@ -42,7 +42,7 @@ func TestTeardownFailure_StopsWithEnvironmentFateUnclear(t *testing.T) {
 		t.Fatalf("dbarenactl run: exit code 0, want nonzero (teardown should fail)\nstdout:\n%s", res.Stdout)
 	}
 
-	sweepID := sweepIDFor(t, manifestPath, "teardown-failure", "tpcc", maxConcurrency, iterations, 0)
+	sweepID := sweepIDFor(t, manifestPath, "teardown-failure", maxConcurrency, iterations, 0)
 	store := openStore(t, env.dbHome)
 
 	sweep, err := store.GetSweep(sweepID)

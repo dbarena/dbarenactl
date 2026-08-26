@@ -3,8 +3,10 @@
 # instance_type is the load driver's own EC2 instance type (independent of
 # project_size), set explicitly on every test point: c8gd.xlarge through xlarge, then
 # c8gd.2xlarge/4xlarge/8xlarge matching project_size at 2xlarge/4xlarge/8xlarge.
-provider: aws/rds
+provider: AWS
+product: RDS
 workload: tpcc
+region: us-east-1
 scenario_path: ../../benchctl/scenarios/rds-tpcc-tiers.yaml
 test_points:
   # small: db.t4g.small, 20 GB / 3,000 IOPS (default, gp3 floor)
@@ -118,11 +120,11 @@ test_points:
       project_size: 8xlarge
       warehouses: "5120"
       threads: "1,2,4,8,16,32,64,128,192"
-      instance_type: c8gd.8xlarge
+      instance_type: c8gd.12xlarge
   - tier: 8xlarge
     bound_type: compute
     set:
       project_size: 8xlarge
       warehouses: "896"
       threads: "1,2,4,8,16,32,64,128,192"
-      instance_type: c8gd.8xlarge
+      instance_type: c8gd.12xlarge

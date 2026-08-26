@@ -15,7 +15,7 @@ import (
 // since fetch failing means teardown is never reached.
 func TestFetchFailure_ExhaustsRetriesThenStops(t *testing.T) {
 	broken := testPointSpec{Tier: "small", BoundType: "io"}
-	manifestPath := writeManifest(t, "fetch-failure", "tpcc", []testPointSpec{broken})
+	manifestPath := writeManifest(t, "fetch-failure", []testPointSpec{broken})
 
 	env := newEnv(t, fakeConfig{
 		BootstrapDuration: "50ms",
@@ -38,7 +38,7 @@ func TestFetchFailure_ExhaustsRetriesThenStops(t *testing.T) {
 		t.Fatalf("dbarenactl run: exit code 0, want nonzero (fetch should exhaust its retries)\nstdout:\n%s", res.Stdout)
 	}
 
-	sweepID := sweepIDFor(t, manifestPath, "fetch-failure", "tpcc", maxConcurrency, iterations, 0)
+	sweepID := sweepIDFor(t, manifestPath, "fetch-failure", maxConcurrency, iterations, 0)
 	store := openStore(t, env.dbHome)
 
 	sweep, err := store.GetSweep(sweepID)

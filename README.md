@@ -33,14 +33,20 @@ one machine.
 
 ## Candidate manifests
 
-A candidate manifest is a YAML file describing one sweep: the provider and workload under
-test, the `benchctl` scenario to run, and the list of test points (tier, bound type, and
-scenario parameters) to sweep through. See [candidates/](candidates/) for examples, e.g.
-[candidates/smoke-test.yaml](candidates/smoke-test.yaml):
+A candidate manifest is a YAML file describing one sweep: the provider/product/plan and
+workload under test, the `benchctl` scenario to run, and the list of test points (tier, bound
+type, and scenario parameters) to sweep through. `provider` is one of `AWS`, `GCP`, `Supabase`;
+`product` is the one managed database product valid for that provider (`RDS`, `Cloud SQL for
+Postgres`, `Supabase`); `plan` selects an edition/tier where the product has one (GCP:
+`Enterprise` or `Enterprise Plus`; Supabase: always `Pro`; AWS has none today). See
+[candidates/](candidates/) for examples, e.g. [candidates/smoke-test.yaml](candidates/smoke-test.yaml):
 
 ```yaml
-provider: supabase
+provider: Supabase
+product: Supabase
+plan: Pro
 workload: tpcc
+region: us-east-1
 scenario_path: ../../benchctl/scenarios/oriole-vs-postgres-tpcc-ec2.yaml
 test_points:
   - tier: small
@@ -78,6 +84,34 @@ existing results and extend the budget, or discard progress and start fresh. See
 [docs/troubleshooting.md](docs/troubleshooting.md) for how sweeps fail and how to check for
 infrastructure left running.
 
+## Pricing
+
+`dbarenactl pricing` fetches or manually records provider on-demand list pricing (never
+discounted) and caches it locally only, alongside the rest of dbarenactl's state -- nothing
+is ever uploaded anywhere. Every `fetch`/`set` call appends a new immutable snapshot rather
+than overwriting the previous one, so pricing history is preserved; each snapshot records
+both when dbarenactl captured it and, if the provider's source exposes one, when the
+provider itself last changed the price. Region is never typed by hand: `fetch`/`set` take
+`--candidate <manifest>` and derive both the provider and the region from that manifest's
+`provider:`/`region:` fields, so a snapshot always reflects the same region a candidate was
+actually run against.
+
+```bash
+# Fetch aws/rds pricing for the region candidates/aws-rds-tpcc.yaml declares
+./dbarenactl pricing fetch --candidate candidates/aws-rds-tpcc.yaml
+
+# supabase has no public pricing API, but does publish an agent-facing pricing
+# doc (supabase.com/pricing.md) that's fetched and parsed the same way
+./dbarenactl pricing fetch --candidate candidates/supabase-tpcc.yaml
+
+# for a provider with neither, record a snapshot by hand instead
+./dbarenactl pricing set --candidate candidates/supabase-tpcc.yaml --file supabase-prices.json
+
+# See what's cached, and inspect one snapshot's line items
+./dbarenactl pricing list
+./dbarenactl pricing show aws/rds
+```
+
 ## Command reference
 
 | Command | Description |
@@ -88,7 +122,10 @@ infrastructure left running.
 | `dbarenactl status [sweep-id]` | Show sweep progress, or list incomplete sweeps if no id is given |
 | `dbarenactl delete <sweep-id>` | Permanently delete a sweep's state and tear down associated infrastructure |
 | `dbarenactl results <sweep-id>` | Assemble a results file from a sweep's artifacts (not yet implemented) |
-| `dbarenactl pricing fetch\|set <provider>` | Record a provider pricing snapshot (not yet implemented) |
+| `dbarenactl pricing fetch --candidate <manifest>` | Fetch and record a pricing snapshot from a provider's own primary source (aws/rds, gcp/cloudsql, gcp/cloudsql-enterprise-plus, supabase); provider and region are derived from the manifest |
+| `dbarenactl pricing set --candidate <manifest> --file <items.json>` | Manually record a pricing snapshot for a provider with no automated source |
+| `dbarenactl pricing list [--provider <p>] [--all]` | List cached pricing snapshots (latest per provider/region by default, `--all` for full history) |
+| `dbarenactl pricing show <provider> [--region <r>]` | Show a snapshot's line items in full |
 
 Common `run` flags: `--max-concurrency` (default 1), `--iterations` (successful runs
 required per test point, default 3), `--on-workload-failure retry|fail-teardown`, `--set

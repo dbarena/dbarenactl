@@ -15,7 +15,7 @@ import (
 // failure is enough to stop the whole sweep.
 func TestLaunchFailure_StopsImmediately(t *testing.T) {
 	broken := testPointSpec{Tier: "small", BoundType: "io"}
-	manifestPath := writeManifest(t, "launch-failure", "tpcc", []testPointSpec{broken})
+	manifestPath := writeManifest(t, "launch-failure", []testPointSpec{broken})
 
 	env := newEnv(t, fakeConfig{
 		BootstrapDuration: "50ms",
@@ -37,7 +37,7 @@ func TestLaunchFailure_StopsImmediately(t *testing.T) {
 		t.Fatalf("dbarenactl run: exit code 0, want nonzero (launch should fail)\nstdout:\n%s", res.Stdout)
 	}
 
-	sweepID := sweepIDFor(t, manifestPath, "launch-failure", "tpcc", maxConcurrency, iterations, 0)
+	sweepID := sweepIDFor(t, manifestPath, "launch-failure", maxConcurrency, iterations, 0)
 	store := openStore(t, env.dbHome)
 
 	sweep, err := store.GetSweep(sweepID)

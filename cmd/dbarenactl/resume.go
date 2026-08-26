@@ -168,13 +168,13 @@ func listIncompleteSweeps(store *sweepstate.Store) error {
 		return nil
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "SWEEP\tPROVIDER\tWORKLOAD\tSTATUS")
+	fmt.Fprintln(w, "SWEEP\tPROVIDER\tPRODUCT\tPLAN\tWORKLOAD\tSTATUS")
 	for _, sw := range sweeps {
 		status := string(sw.Status)
 		if sw.HasError() {
 			status = fmt.Sprintf("stopped (%s: %s)", sw.ErrorAction, sw.ErrorDetail)
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", sw.ID, sw.Provider, sw.Workload, status)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", sw.ID, sw.Provider, sw.Product, dashIfEmpty(sw.Plan), sw.Workload, status)
 	}
 	return w.Flush()
 }

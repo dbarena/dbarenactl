@@ -20,7 +20,13 @@ import (
 // field here is, by design, a different sweep -- not a continuation of an
 // existing one.
 type Params struct {
+	// Provider, Product, and Plan mirror internal/manifest.Manifest's fields
+	// (e.g. "AWS"/"RDS"/"", or "GCP"/"Cloud SQL for Postgres"/"Enterprise
+	// Plus") -- kept as three separate fields here rather than flattened
+	// into one string, matching how the manifest itself models them.
 	Provider string
+	Product  string
+	Plan     string
 	// Workload is the manifest's own declared workload (e.g. "tpcc"),
 	// folded into both the id's readable prefix and its hash -- two sweeps
 	// for the same provider but different workloads must be visually
@@ -42,11 +48,16 @@ type Params struct {
 
 var nonSlugChars = regexp.MustCompile(`[^a-z0-9]+`)
 
-// Compute returns a readable provider+workload slug followed by a short
-// hash of every parameter in p, e.g. "aws-rds-tpcc-3f9a1c2b8e47".
+// Compute returns a readable provider[-plan]-workload slug followed by a
+// short hash of every parameter in p, e.g. "gcp-enterprise-plus-tpcc-3f9a1c2b8e47".
+// Product is hashed but deliberately left out of the readable prefix -- it's
+// redundant with Provider today, and status/resume show it as its own
+// column instead of lengthening every id for a case that doesn't exist yet.
 func Compute(p Params) string {
 	h := sha256.New()
 	fmt.Fprintf(h, "provider=%s\n", p.Provider)
+	fmt.Fprintf(h, "product=%s\n", p.Product)
+	fmt.Fprintf(h, "plan=%s\n", p.Plan)
 	fmt.Fprintf(h, "workload=%s\n", p.Workload)
 	fmt.Fprintf(h, "max_concurrency=%d\n", p.MaxConcurrency)
 	fmt.Fprintf(h, "iterations=%d\n", p.Iterations)
@@ -62,7 +73,13 @@ func Compute(p Params) string {
 	}
 	h.Write(p.ManifestContent)
 	sum := hex.EncodeToString(h.Sum(nil))[:12]
-	return slugify(p.Provider) + "-" + slugify(p.Workload) + "-" + sum
+
+	prefix := slugify(p.Provider)
+	if p.Plan != "" {
+		prefix += "-" + slugify(p.Plan)
+	}
+	prefix += "-" + slugify(p.Workload)
+	return prefix + "-" + sum
 }
 
 // slugify lowercases s and collapses any run of non-alphanumeric characters

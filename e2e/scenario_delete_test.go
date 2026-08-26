@@ -19,10 +19,10 @@ import (
 // ever reaching teardown (see scenario_fetch_failure_test.go). It is the
 // cheapest deterministic way to give `delete` something real to tear down.
 // Returns the env and the sweep id.
-func liveRunEnv(t *testing.T, provider string, b behavior) (*testEnv, string) {
+func liveRunEnv(t *testing.T, workload string, b behavior) (*testEnv, string) {
 	t.Helper()
 	point := testPointSpec{Tier: "small", BoundType: "io"}
-	manifestPath := writeManifest(t, provider, "tpcc", []testPointSpec{point})
+	manifestPath := writeManifest(t, workload, []testPointSpec{point})
 
 	env := newEnv(t, fakeConfig{
 		BootstrapDuration: "50ms",
@@ -43,7 +43,7 @@ func liveRunEnv(t *testing.T, provider string, b behavior) (*testEnv, string) {
 		t.Fatalf("dbarenactl run: exit code 0, want nonzero (the sweep should stop with its environment up)\nstdout:\n%s", res.Stdout)
 	}
 
-	sweepID := sweepIDFor(t, manifestPath, provider, "tpcc", maxConcurrency, iterations, 0)
+	sweepID := sweepIDFor(t, manifestPath, workload, maxConcurrency, iterations, 0)
 	active, err := openStore(t, env.dbHome).ListNonTerminalRuns(sweepID)
 	if err != nil {
 		t.Fatalf("ListNonTerminalRuns: %v", err)
@@ -161,7 +161,7 @@ func TestDelete_YesFlagSkipsPrompt(t *testing.T) {
 // needed.
 func TestDelete_NoRunningEnvironmentsNeedsNoPrompt(t *testing.T) {
 	point := testPointSpec{Tier: "small", BoundType: "io"}
-	manifestPath := writeManifest(t, "delete-completed", "tpcc", []testPointSpec{point})
+	manifestPath := writeManifest(t, "delete-completed", []testPointSpec{point})
 
 	env := newEnv(t, fakeConfig{
 		BootstrapDuration: "50ms",
@@ -182,7 +182,7 @@ func TestDelete_NoRunningEnvironmentsNeedsNoPrompt(t *testing.T) {
 		t.Fatalf("dbarenactl run: exit code %d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
-	sweepID := sweepIDFor(t, manifestPath, "delete-completed", "tpcc", maxConcurrency, iterations, 0)
+	sweepID := sweepIDFor(t, manifestPath, "delete-completed", maxConcurrency, iterations, 0)
 	store := openStore(t, env.dbHome)
 
 	deleteRes := runDbarenactl(t, env.vars(), "", "delete", sweepID)

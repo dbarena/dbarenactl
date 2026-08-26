@@ -1,0 +1,6 @@
+{
+  "services": [
+    {"serviceId": "decoy-1234", "name": "services/decoy-1234", "displayName": "Decoy Service"}
+  ],
+  "nextPageToken": "p2"
+}

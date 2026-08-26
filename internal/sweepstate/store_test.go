@@ -20,7 +20,7 @@ func openTestStore(t *testing.T) *Store {
 
 func seedSweep(t *testing.T, st *Store, id string) *Sweep {
 	t.Helper()
-	sw := &Sweep{ID: id, Provider: "aws/rds", Workload: "tpcc", ParamsJSON: "{}", CreatedAt: time.Now().UTC()}
+	sw := &Sweep{ID: id, Provider: "AWS", Product: "RDS", Workload: "tpcc", ParamsJSON: "{}", CreatedAt: time.Now().UTC()}
 	if err := st.CreateSweep(sw); err != nil {
 		t.Fatalf("CreateSweep: %v", err)
 	}
@@ -48,11 +48,26 @@ func TestSweep_CreateAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSweep: %v", err)
 	}
-	if got.Provider != "aws/rds" || got.Workload != "tpcc" || got.Status != SweepRunning {
+	if got.Provider != "AWS" || got.Product != "RDS" || got.Plan != "" || got.Workload != "tpcc" || got.Status != SweepRunning {
 		t.Errorf("got = %+v", got)
 	}
 	if got.HasError() {
 		t.Error("fresh sweep should not have an error")
+	}
+}
+
+func TestSweep_ProductAndPlanRoundTrip(t *testing.T) {
+	st := openTestStore(t)
+	sw := &Sweep{ID: "sweep-gcp", Provider: "GCP", Product: "Cloud SQL for Postgres", Plan: "Enterprise Plus", Workload: "tpcc", ParamsJSON: "{}", CreatedAt: time.Now().UTC()}
+	if err := st.CreateSweep(sw); err != nil {
+		t.Fatalf("CreateSweep: %v", err)
+	}
+	got, err := st.GetSweep("sweep-gcp")
+	if err != nil {
+		t.Fatalf("GetSweep: %v", err)
+	}
+	if got.Provider != "GCP" || got.Product != "Cloud SQL for Postgres" || got.Plan != "Enterprise Plus" {
+		t.Errorf("got = %+v", got)
 	}
 }
 
@@ -641,7 +656,7 @@ func TestOpen_PersistsAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSweep after reopen: %v", err)
 	}
-	if sw.Provider != "aws/rds" {
+	if sw.Provider != "AWS" {
 		t.Errorf("sw = %+v", sw)
 	}
 }

@@ -173,11 +173,16 @@ type testPointSpec struct {
 
 // writeManifest writes a minimal valid manifest (see
 // internal/manifest.Manifest.validate) to a temp file and returns its path.
-// scenario_path is a placeholder -- the fake never reads it.
-func writeManifest(t *testing.T, provider, workload string, points []testPointSpec) string {
+// scenario_path is a placeholder -- the fake never reads it. Provider/Product
+// are fixed to AWS/RDS -- these are synthetic fixtures against a fake
+// benchctl, not real cloud providers, and internal/manifest's Provider enum
+// no longer accepts arbitrary strings -- so each test's distinguishing label
+// (formerly passed as an opaque "provider" string) is now carried in
+// workload instead, which also feeds internal/sweepid's hash.
+func writeManifest(t *testing.T, workload string, points []testPointSpec) string {
 	t.Helper()
 	var b strings.Builder
-	fmt.Fprintf(&b, "provider: %s\nworkload: %s\nscenario_path: placeholder-scenario.yaml\ntest_points:\n", provider, workload)
+	fmt.Fprintf(&b, "provider: AWS\nproduct: RDS\nworkload: %s\nscenario_path: placeholder-scenario.yaml\ntest_points:\n", workload)
 	for _, p := range points {
 		fmt.Fprintf(&b, "  - tier: %s\n    bound_type: %s\n", p.Tier, p.BoundType)
 		if p.Variant != "" {
@@ -195,14 +200,16 @@ func writeManifest(t *testing.T, provider, workload string, points []testPointSp
 // sweepIDFor recomputes the sweep id `dbarenactl run` would derive for
 // manifestPath under these flags, exactly as cmd/dbarenactl/run.go does --
 // letting tests find their sweep's rows without scraping CLI output.
-func sweepIDFor(t *testing.T, manifestPath, provider, workload string, maxConcurrency, iterations, maxWorkloadFailures int) string {
+// Provider/Product are fixed to AWS/RDS, matching writeManifest's fixed combo.
+func sweepIDFor(t *testing.T, manifestPath, workload string, maxConcurrency, iterations, maxWorkloadFailures int) string {
 	t.Helper()
 	content, err := os.ReadFile(manifestPath)
 	if err != nil {
 		t.Fatalf("read manifest: %v", err)
 	}
 	return sweepid.Compute(sweepid.Params{
-		Provider:            provider,
+		Provider:            "AWS",
+		Product:             "RDS",
 		Workload:            workload,
 		ManifestContent:     content,
 		MaxConcurrency:      maxConcurrency,

@@ -14,11 +14,64 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+// Provider is the cloud/platform a manifest's Product runs on.
+const (
+	ProviderAWS      = "AWS"
+	ProviderGCP      = "GCP"
+	ProviderSupabase = "Supabase"
+)
+
+// Product is the managed database product under test. Each Provider has
+// exactly one valid Product today (see validProducts) -- Product is still
+// its own explicit, validated field rather than being derived, so the
+// schema reads self-documenting and a second product under an existing
+// provider (e.g. AWS Aurora) is a data change later, not a code change.
+const (
+	ProductRDS                 = "RDS"
+	ProductCloudSQLForPostgres = "Cloud SQL for Postgres"
+	ProductSupabase            = "Supabase"
+)
+
+// Plan is the product edition/tier, where the product has one. AWS RDS has
+// no plan concept today; GCP Cloud SQL and Supabase always have one.
+const (
+	PlanEnterprise     = "Enterprise"
+	PlanEnterprisePlus = "Enterprise Plus"
+	PlanPro            = "Pro"
+)
+
+// validProducts is the one valid Product for each Provider -- the sole
+// source of truth Product validation checks against.
+var validProducts = map[string]string{
+	ProviderAWS:      ProductRDS,
+	ProviderGCP:      ProductCloudSQLForPostgres,
+	ProviderSupabase: ProductSupabase,
+}
+
+// validPlans is the set of Plan values each Provider accepts. A Provider
+// absent from this map has no plan concept -- Plan must be empty for it.
+var validPlans = map[string][]string{
+	ProviderGCP:      {PlanEnterprise, PlanEnterprisePlus},
+	ProviderSupabase: {PlanPro},
+}
+
+// pricingFetcherKeys maps Provider (equivalently (Provider, Product), since
+// they're 1:1 today) to the id `dbarenactl pricing fetch` looks up in
+// internal/pricing.Registry. Plan is deliberately excluded: e.g. GCP's
+// Enterprise and Enterprise Plus editions price from the exact same Cloud
+// SQL Billing Catalog SKUs, so both must resolve to the same Fetcher.
+var pricingFetcherKeys = map[string]string{
+	ProviderAWS:      "aws/rds",
+	ProviderGCP:      "gcp/cloudsql",
+	ProviderSupabase: "supabase",
+}
 
 // TestPointDef is one (tier, bound_type, variant) combination to sweep:
 // which benchctl scenario to run it against and which --set overrides
@@ -40,12 +93,27 @@ func (d TestPointDef) Key() string {
 
 // Manifest describes every test point required for one provider's sweep.
 type Manifest struct {
-	// Provider identifies the provider this manifest covers, e.g. "aws/rds".
-	// Matched against dbarenactl run --provider.
+	// Provider is the cloud/platform this manifest covers: one of
+	// ProviderAWS, ProviderGCP, ProviderSupabase.
 	Provider string `yaml:"provider"`
+	// Product is the managed database product under test -- validated
+	// against validProducts, the one valid value for Provider.
+	Product string `yaml:"product"`
+	// Plan is the product edition/tier, where the product has one --
+	// validated against validPlans. Must be empty for a Provider with no
+	// plan concept (AWS today).
+	Plan string `yaml:"plan,omitempty"`
 	// Workload is the benchmark workload name, e.g. "tpcc" -- recorded on
 	// every test point and reused when assembling results.
 	Workload string `yaml:"workload"`
+	// Region is the cloud region this manifest's provider was actually
+	// deployed/priced in, e.g. "us-east1". Optional at the manifest level --
+	// providers with no per-region pricing (e.g. supabase) never set it --
+	// but required by `dbarenactl pricing fetch`/`pricing set` for any
+	// provider that does have region-scoped pricing. Deliberately not
+	// inferred from a deployment's Terraform default: actual runs can use a
+	// different region than a module's `default =` value.
+	Region string `yaml:"region,omitempty"`
 	// ScenarioPath is the benchctl scenario file, resolved relative to the
 	// manifest file's own directory when not absolute.
 	ScenarioPath string         `yaml:"scenario_path"`
@@ -63,6 +131,13 @@ type Manifest struct {
 // manifest's own directory, always as an absolute path.
 func (m *Manifest) ResolvedScenarioPath() string {
 	return m.resolvedScenarioPath
+}
+
+// PricingFetcherKey returns the provider id `dbarenactl pricing fetch`
+// looks up in internal/pricing.Registry -- Provider+Product only, Plan
+// deliberately ignored (see pricingFetcherKeys' doc comment).
+func (m *Manifest) PricingFetcherKey() string {
+	return pricingFetcherKeys[m.Provider]
 }
 
 // paramPlaceholderRe matches `{{ params.NAME }}` placeholders in a
@@ -148,8 +223,19 @@ func parse(data []byte) (*Manifest, error) {
 }
 
 func (m *Manifest) validate() error {
-	if m.Provider == "" {
-		return fmt.Errorf("provider is required")
+	wantProduct, ok := validProducts[m.Provider]
+	if !ok {
+		return fmt.Errorf("provider must be one of %s, %s, %s, got %q", ProviderAWS, ProviderGCP, ProviderSupabase, m.Provider)
+	}
+	if m.Product != wantProduct {
+		return fmt.Errorf("provider %q requires product %q, got %q", m.Provider, wantProduct, m.Product)
+	}
+	if allowed, ok := validPlans[m.Provider]; ok {
+		if !slices.Contains(allowed, m.Plan) {
+			return fmt.Errorf("provider %q requires plan to be one of %v, got %q", m.Provider, allowed, m.Plan)
+		}
+	} else if m.Plan != "" {
+		return fmt.Errorf("provider %q does not use a plan -- remove the plan: field (got %q)", m.Provider, m.Plan)
 	}
 	if m.Workload == "" {
 		return fmt.Errorf("workload is required")

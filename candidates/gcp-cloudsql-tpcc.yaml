@@ -7,8 +7,11 @@
 # IOPS/throughput baseline (https://supabase.com/docs/guides/platform/compute-and-disk)
 # which is handled directly in benchctl, therefore no overrides are
 # specified here.
-provider: gcp/cloudsql
+provider: GCP
+product: Cloud SQL for Postgres
+plan: Enterprise
 workload: tpcc
+region: us-east1
 scenario_path: ../../benchctl/scenarios/gcp-cloudsql-tpcc-tiers.yaml
 test_points:
   # medium: db-custom-N4-2-4096 (2 vCPU / 4 GB, matches RDS's db.t4g.medium),

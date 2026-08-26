@@ -8,7 +8,8 @@ import (
 )
 
 const validYAML = `
-provider: aws/rds
+provider: AWS
+product: RDS
 workload: tpcc
 scenario_path: rds-tpcc-ec2-tiers.yaml
 test_points:
@@ -29,8 +30,11 @@ func TestParse_Valid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if m.Provider != "aws/rds" {
+	if m.Provider != "AWS" {
 		t.Errorf("Provider = %q", m.Provider)
+	}
+	if m.PricingFetcherKey() != "aws/rds" {
+		t.Errorf("PricingFetcherKey() = %q, want %q", m.PricingFetcherKey(), "aws/rds")
 	}
 	if len(m.TestPoints) != 2 {
 		t.Fatalf("TestPoints = %d, want 2", len(m.TestPoints))
@@ -42,10 +46,10 @@ func TestParse_Valid(t *testing.T) {
 
 func TestParse_MissingRequiredFields(t *testing.T) {
 	cases := map[string]string{
-		"provider":      "workload: tpcc\nscenario_path: x.yaml\ntest_points:\n  - {tier: small, bound_type: io}\n",
-		"workload":      "provider: aws/rds\nscenario_path: x.yaml\ntest_points:\n  - {tier: small, bound_type: io}\n",
-		"scenario_path": "provider: aws/rds\nworkload: tpcc\ntest_points:\n  - {tier: small, bound_type: io}\n",
-		"test_points":   "provider: aws/rds\nworkload: tpcc\nscenario_path: x.yaml\n",
+		"provider":      "product: RDS\nworkload: tpcc\nscenario_path: x.yaml\ntest_points:\n  - {tier: small, bound_type: io}\n",
+		"workload":      "provider: AWS\nproduct: RDS\nscenario_path: x.yaml\ntest_points:\n  - {tier: small, bound_type: io}\n",
+		"scenario_path": "provider: AWS\nproduct: RDS\nworkload: tpcc\ntest_points:\n  - {tier: small, bound_type: io}\n",
+		"test_points":   "provider: AWS\nproduct: RDS\nworkload: tpcc\nscenario_path: x.yaml\n",
 	}
 	for name, yamlSrc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -58,14 +62,14 @@ func TestParse_MissingRequiredFields(t *testing.T) {
 }
 
 func TestParse_MissingTierOrBoundType(t *testing.T) {
-	_, err := parse([]byte("provider: aws/rds\nworkload: tpcc\nscenario_path: x.yaml\ntest_points:\n  - {tier: small}\n"))
+	_, err := parse([]byte("provider: AWS\nproduct: RDS\nworkload: tpcc\nscenario_path: x.yaml\ntest_points:\n  - {tier: small}\n"))
 	if err == nil || !strings.Contains(err.Error(), "bound_type") {
 		t.Fatalf("expected bound_type error, got: %v", err)
 	}
 }
 
 func TestParse_DuplicateTestPoint(t *testing.T) {
-	src := "provider: aws/rds\nworkload: tpcc\nscenario_path: x.yaml\ntest_points:\n" +
+	src := "provider: AWS\nproduct: RDS\nworkload: tpcc\nscenario_path: x.yaml\ntest_points:\n" +
 		"  - {tier: small, bound_type: io}\n" +
 		"  - {tier: small, bound_type: io}\n"
 	_, err := parse([]byte(src))
@@ -132,7 +136,7 @@ func TestLoad_ResolvesRelativeCandidatePathToAbsoluteScenarioPath(t *testing.T) 
 
 func TestLoad_AbsoluteScenarioPathUnchanged(t *testing.T) {
 	dir := t.TempDir()
-	src := "provider: aws/rds\nworkload: tpcc\nscenario_path: /opt/benchctl/scenarios/x.yaml\ntest_points:\n  - {tier: small, bound_type: io}\n"
+	src := "provider: AWS\nproduct: RDS\nworkload: tpcc\nscenario_path: /opt/benchctl/scenarios/x.yaml\ntest_points:\n  - {tier: small, bound_type: io}\n"
 	p := filepath.Join(dir, "aws-rds.yaml")
 	if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
 		t.Fatal(err)
@@ -154,7 +158,7 @@ func TestLoad_NonexistentFile(t *testing.T) {
 
 func manifestWithParam(t *testing.T) *Manifest {
 	t.Helper()
-	src := "provider: supabase\nworkload: tpcc\nscenario_path: x.yaml\ntest_points:\n" +
+	src := "provider: Supabase\nproduct: Supabase\nplan: Pro\nworkload: tpcc\nscenario_path: x.yaml\ntest_points:\n" +
 		"  - {tier: small, bound_type: io, set: {supabase_org_id: \"{{ params.supabase_org_id }}\", warehouses: \"80\"}}\n" +
 		"  - {tier: small, bound_type: compute, set: {supabase_org_id: \"{{ params.supabase_org_id }}\", warehouses: \"14\"}}\n"
 	m, err := parse([]byte(src))
@@ -192,7 +196,7 @@ func TestResolveParams_MissingSingleParam(t *testing.T) {
 }
 
 func TestResolveParams_MissingMultipleParamsReportedTogether(t *testing.T) {
-	src := "provider: x\nworkload: tpcc\nscenario_path: x.yaml\ntest_points:\n" +
+	src := "provider: AWS\nproduct: RDS\nworkload: tpcc\nscenario_path: x.yaml\ntest_points:\n" +
 		"  - {tier: small, bound_type: io, set: {a: \"{{ params.foo }}\", b: \"{{ params.bar }}\"}}\n"
 	m, err := parse([]byte(src))
 	if err != nil {
@@ -228,5 +232,77 @@ func TestResolveParams_IdempotentOnAlreadyResolvedInput(t *testing.T) {
 	}
 	if m.TestPoints[0].Set["supabase_org_id"] != "abc1234" {
 		t.Errorf("value changed on second resolve: %q", m.TestPoints[0].Set["supabase_org_id"])
+	}
+}
+
+// --- Provider/Product/Plan derivation and validation ---
+
+func baseYAML(fields string) string {
+	return fields + "\nworkload: tpcc\nscenario_path: x.yaml\ntest_points:\n  - {tier: small, bound_type: io}\n"
+}
+
+func TestPricingFetcherKey_IgnoresPlan(t *testing.T) {
+	cases := []struct {
+		name           string
+		fields         string
+		wantFetcherKey string
+	}{
+		{"aws/rds", "provider: AWS\nproduct: RDS", "aws/rds"},
+		{"gcp/cloudsql (Enterprise)", "provider: GCP\nproduct: Cloud SQL for Postgres\nplan: Enterprise", "gcp/cloudsql"},
+		{"gcp/cloudsql (Enterprise Plus)", "provider: GCP\nproduct: Cloud SQL for Postgres\nplan: Enterprise Plus", "gcp/cloudsql"},
+		{"supabase", "provider: Supabase\nproduct: Supabase\nplan: Pro", "supabase"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, err := parse([]byte(baseYAML(tc.fields)))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if got := m.PricingFetcherKey(); got != tc.wantFetcherKey {
+				t.Errorf("PricingFetcherKey() = %q, want %q", got, tc.wantFetcherKey)
+			}
+		})
+	}
+}
+
+func TestValidate_RejectsUnknownProvider(t *testing.T) {
+	_, err := parse([]byte(baseYAML("provider: Azure\nproduct: SQL")))
+	if err == nil || !strings.Contains(err.Error(), "provider must be one of") {
+		t.Fatalf("expected an unknown-provider error, got: %v", err)
+	}
+}
+
+func TestValidate_RejectsMismatchedProduct(t *testing.T) {
+	_, err := parse([]byte(baseYAML("provider: AWS\nproduct: Aurora")))
+	if err == nil || !strings.Contains(err.Error(), `requires product "RDS"`) {
+		t.Fatalf("expected a product-mismatch error, got: %v", err)
+	}
+}
+
+func TestValidate_GCPRequiresPlan(t *testing.T) {
+	_, err := parse([]byte(baseYAML("provider: GCP\nproduct: Cloud SQL for Postgres")))
+	if err == nil || !strings.Contains(err.Error(), "requires plan to be one of") {
+		t.Fatalf("expected a missing-plan error, got: %v", err)
+	}
+}
+
+func TestValidate_GCPRejectsUnknownPlan(t *testing.T) {
+	_, err := parse([]byte(baseYAML("provider: GCP\nproduct: Cloud SQL for Postgres\nplan: Standard")))
+	if err == nil || !strings.Contains(err.Error(), "requires plan to be one of") {
+		t.Fatalf("expected an unknown-plan error, got: %v", err)
+	}
+}
+
+func TestValidate_SupabaseRequiresPlanPro(t *testing.T) {
+	_, err := parse([]byte(baseYAML("provider: Supabase\nproduct: Supabase")))
+	if err == nil || !strings.Contains(err.Error(), "requires plan to be one of") {
+		t.Fatalf("expected a missing-plan error, got: %v", err)
+	}
+}
+
+func TestValidate_AWSRejectsPlan(t *testing.T) {
+	_, err := parse([]byte(baseYAML("provider: AWS\nproduct: RDS\nplan: Enterprise")))
+	if err == nil || !strings.Contains(err.Error(), "does not use a plan") {
+		t.Fatalf("expected a plan-not-applicable error, got: %v", err)
 	}
 }

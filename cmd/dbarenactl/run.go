@@ -99,6 +99,8 @@ func runRun(cmd *cobra.Command, _ []string) error {
 
 	sweepID := sweepid.Compute(sweepid.Params{
 		Provider:            m.Provider,
+		Product:             m.Product,
+		Plan:                m.Plan,
 		Workload:            m.Workload,
 		ManifestContent:     manifestContent,
 		MaxConcurrency:      runMaxConcurrency,
@@ -162,14 +164,17 @@ func runRun(cmd *cobra.Command, _ []string) error {
 	}
 
 	params := sweepParams{
-		Provider: m.Provider, Workload: m.Workload, ManifestPath: runCandidate, MaxConcurrency: runMaxConcurrency,
+		Provider: m.Provider, Product: m.Product, Plan: m.Plan, Workload: m.Workload, ManifestPath: runCandidate, MaxConcurrency: runMaxConcurrency,
 		Iterations: runIterations, OnWorkloadFailure: runOnWorkloadFailure, MaxWorkloadFailures: runMaxWorkloadFailures,
 	}
 	paramsJSON, err := json.Marshal(params)
 	if err != nil {
 		return err
 	}
-	sweep := &sweepstate.Sweep{ID: sweepID, Provider: m.Provider, Workload: m.Workload, ParamsJSON: string(paramsJSON), CreatedAt: time.Now().UTC()}
+	sweep := &sweepstate.Sweep{
+		ID: sweepID, Provider: m.Provider, Product: m.Product, Plan: m.Plan, Workload: m.Workload,
+		ParamsJSON: string(paramsJSON), CreatedAt: time.Now().UTC(),
+	}
 	if err := store.CreateSweep(sweep); err != nil {
 		return err
 	}

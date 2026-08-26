@@ -370,6 +370,21 @@ func (s *Scheduler) reconcileWaitingRemote(ctx context.Context, sweepID string, 
 }
 
 func (s *Scheduler) reconcileNeedsResultsPull(ctx context.Context, sweepID string, run *sweepstate.Run, opts Options) (bool, error) {
+	rs, statusErr := s.Bench.Status(ctx, run.RunID)
+	if errors.Is(statusErr, bench.ErrBenchctlUnusable) {
+		if rerr := s.Store.RecordError(sweepID, ActionStatus, run.RunID, statusErr.Error()); rerr != nil {
+			return false, rerr
+		}
+		return false, fmt.Errorf("check status of %s: %w", run.RunID, statusErr)
+	}
+	if statusErr == nil && rs.TerminatedAt != nil {
+		// The environment came down (e.g. a manual `benchctl teardown` on a
+		// run stuck for good) before results were ever pulled -- no retry
+		// will succeed against infra that no longer exists.
+		s.logf("%s: environment already torn down -- results can no longer be fetched, finalizing as failed", run.RunID)
+		return true, s.Store.FinalizeRun(run.RunID, "failure")
+	}
+
 	dest := filepath.Join(opts.ArtifactBaseDir, run.RunID)
 	s.logf("%s: fetching results", run.RunID)
 	fetchErr := s.Bench.Fetch(ctx, run.RunID, dest)

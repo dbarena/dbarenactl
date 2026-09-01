@@ -89,6 +89,59 @@ func TestTestPointDef_Key(t *testing.T) {
 	}
 }
 
+func TestParseTestPointRef(t *testing.T) {
+	tier, boundType, variant, err := ParseTestPointRef("small/io")
+	if err != nil {
+		t.Fatalf("ParseTestPointRef: %v", err)
+	}
+	if tier != "small" || boundType != "io" || variant != "" {
+		t.Errorf("got (%q, %q, %q)", tier, boundType, variant)
+	}
+
+	tier, boundType, variant, err = ParseTestPointRef("large/io/matched-to-rds")
+	if err != nil {
+		t.Fatalf("ParseTestPointRef: %v", err)
+	}
+	if tier != "large" || boundType != "io" || variant != "matched-to-rds" {
+		t.Errorf("got (%q, %q, %q)", tier, boundType, variant)
+	}
+}
+
+func TestParseTestPointRef_Invalid(t *testing.T) {
+	for _, ref := range []string{"small", "a/b/c/d", ""} {
+		if _, _, _, err := ParseTestPointRef(ref); err == nil {
+			t.Errorf("ParseTestPointRef(%q): expected an error", ref)
+		}
+	}
+}
+
+func TestManifest_FindTestPoint(t *testing.T) {
+	m := &Manifest{TestPoints: []TestPointDef{
+		{Tier: "small", BoundType: "io"},
+		{Tier: "large", BoundType: "io", Variant: "matched-to-rds"},
+	}}
+
+	d, ok := m.FindTestPoint("small", "io", "")
+	if !ok || d.Tier != "small" {
+		t.Errorf("FindTestPoint(small, io, \"\") = %+v, %v", d, ok)
+	}
+
+	d, ok = m.FindTestPoint("large", "io", "matched-to-rds")
+	if !ok || d.Variant != "matched-to-rds" {
+		t.Errorf("FindTestPoint(large, io, matched-to-rds) = %+v, %v", d, ok)
+	}
+
+	// A variant-qualified lookup must not match a no-variant entry, and
+	// vice versa -- these are distinct test points.
+	if _, ok := m.FindTestPoint("small", "io", "some-variant"); ok {
+		t.Error("FindTestPoint(small, io, some-variant) should not match the no-variant small/io entry")
+	}
+
+	if _, ok := m.FindTestPoint("nonexistent", "io", ""); ok {
+		t.Error("FindTestPoint(nonexistent, io, \"\") should not be found")
+	}
+}
+
 func TestLoad_ResolvesRelativeScenarioPath(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "aws-rds.yaml")

@@ -17,6 +17,10 @@ test_points:
       warehouses: "80"
       threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
+      db_instance_type: db.t4g.small
+      disk_type: gp3
+      disk_size_gb: "20"
+      disk_iops: "3000"
   - tier: small
     bound_type: compute
     set:
@@ -24,6 +28,10 @@ test_points:
       warehouses: "14"
       threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
+      db_instance_type: db.t4g.small
+      disk_type: gp3
+      disk_size_gb: "20"
+      disk_iops: "3000"
   # medium: db.t4g.medium, 32 GB / 3,000 IOPS (default, gp3 floor)
   - tier: medium
     bound_type: io
@@ -32,6 +40,10 @@ test_points:
       warehouses: "160"
       threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
+      db_instance_type: db.t4g.medium
+      disk_type: gp3
+      disk_size_gb: "32"
+      disk_iops: "3000"
   - tier: medium
     bound_type: compute
     set:
@@ -39,6 +51,10 @@ test_points:
       warehouses: "28"
       threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
+      db_instance_type: db.t4g.medium
+      disk_type: gp3
+      disk_size_gb: "32"
+      disk_iops: "3000"
   # large: db.m6g.large, 64 GB / 3,000 IOPS
   - tier: large
     bound_type: io
@@ -47,6 +63,10 @@ test_points:
       warehouses: "320"
       threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
+      db_instance_type: db.m6g.large
+      disk_type: gp3
+      disk_size_gb: "64"
+      disk_iops: "3600"
   - tier: large
     bound_type: compute
     set:
@@ -54,6 +74,10 @@ test_points:
       warehouses: "56"
       threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
+      db_instance_type: db.m6g.large
+      disk_type: gp3
+      disk_size_gb: "64"
+      disk_iops: "3600"
   # xlarge: db.m6g.xlarge. IO-bound explicitly crosses the 400 GiB threshold
   # to unlock 12,000 IOPS (matching Supabase's floor at that IOPS level, see
   # candidates/supabase.yaml); compute-bound stays at the 128 GB/3,000 IOPS
@@ -65,8 +89,13 @@ test_points:
       warehouses: "640"
       disk_size_gb: "400"
       disk_iops: "12000"
+      # per https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html — gp3's baseline jumps to 12,000 IOPS/500 MiB/s at >=400 GiB for Postgres
+      disk_baseline_iops: "12000"
+      disk_baseline_throughput_mibps: "500"
       threads: "1,2,4,8,16,24"
       instance_type: c8gd.xlarge
+      db_instance_type: db.m6g.xlarge
+      disk_type: gp3
   - tier: xlarge
     bound_type: compute
     set:
@@ -74,6 +103,10 @@ test_points:
       warehouses: "112"
       threads: "1,2,4,8,16,24"
       instance_type: c8gd.xlarge
+      db_instance_type: db.m6g.xlarge
+      disk_type: gp3
+      disk_size_gb: "128"
+      disk_iops: "6000"
   # 2xlarge: db.m6g.2xlarge. Default allocated storage (256 GB) is still
   # below the 400 GiB custom-IOPS threshold, so IO-bound crosses it the same
   # way xlarge does, to unlock the documented 12,000 IOPS baseline.
@@ -85,8 +118,13 @@ test_points:
       warehouses: "1280"
       disk_size_gb: "400"
       disk_iops: "12000"
+      # per https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html — gp3's baseline jumps to 12,000 IOPS/500 MiB/s at >=400 GiB for Postgres
+      disk_baseline_iops: "12000"
+      disk_baseline_throughput_mibps: "500"
       threads: "1,2,4,8,16,32,48"
       instance_type: c8gd.2xlarge
+      db_instance_type: db.m6g.2xlarge
+      disk_type: gp3
   - tier: 2xlarge
     bound_type: compute
     set:
@@ -94,9 +132,17 @@ test_points:
       warehouses: "224"
       threads: "1,2,4,8,16,32,48"
       instance_type: c8gd.2xlarge
+      db_instance_type: db.m6g.2xlarge
+      disk_type: gp3
+      disk_size_gb: "256"
+      disk_iops: "12000"
   # 4xlarge: db.m6g.4xlarge. Default allocated storage (512 GB) is already
   # >= the 400 GiB threshold, so the size_map's 20,000 IOPS applies with no
-  # override needed on either row.
+  # override needed on either row for the achieved IOPS itself -- but the
+  # pricing baseline still needs stating explicitly: same >=400 GiB baseline
+  # as xlarge/2xlarge (flat step, doesn't increase further with size), since
+  # the cost calculator otherwise falls back to gp3's unconditional 3,000/125
+  # default and overstates billed IOPS/throughput overage.
   - tier: 4xlarge
     bound_type: io
     set:
@@ -104,6 +150,12 @@ test_points:
       warehouses: "2560"
       threads: "1,2,4,8,16,32,64,96"
       instance_type: c8gd.4xlarge
+      db_instance_type: db.m6g.4xlarge
+      disk_type: gp3
+      disk_size_gb: "512"
+      disk_iops: "20000"
+      disk_baseline_iops: "12000"
+      disk_baseline_throughput_mibps: "500"
   - tier: 4xlarge
     bound_type: compute
     set:
@@ -111,9 +163,19 @@ test_points:
       warehouses: "448"
       threads: "1,2,4,8,16,32,64,96"
       instance_type: c8gd.4xlarge
+      db_instance_type: db.m6g.4xlarge
+      disk_type: gp3
+      disk_size_gb: "512"
+      disk_iops: "20000"
+      disk_baseline_iops: "12000"
+      disk_baseline_throughput_mibps: "500"
   # 8xlarge: db.m6g.8xlarge. Default allocated storage (1024 GB) is already
   # >= the 400 GiB threshold, so the size_map's 40,000 IOPS applies with no
-  # override needed on either row.
+  # override needed on either row for the achieved IOPS itself -- but the
+  # pricing baseline still needs stating explicitly: same >=400 GiB baseline
+  # as xlarge/2xlarge (flat step, doesn't increase further with size), since
+  # the cost calculator otherwise falls back to gp3's unconditional 3,000/125
+  # default and overstates billed IOPS/throughput overage.
   - tier: 8xlarge
     bound_type: io
     set:
@@ -121,6 +183,12 @@ test_points:
       warehouses: "5120"
       threads: "1,2,4,8,16,32,64,128,192"
       instance_type: c8gd.12xlarge
+      db_instance_type: db.m6g.8xlarge
+      disk_type: gp3
+      disk_size_gb: "1024"
+      disk_iops: "40000"
+      disk_baseline_iops: "12000"
+      disk_baseline_throughput_mibps: "500"
   - tier: 8xlarge
     bound_type: compute
     set:
@@ -128,3 +196,9 @@ test_points:
       warehouses: "896"
       threads: "1,2,4,8,16,32,64,128,192"
       instance_type: c8gd.12xlarge
+      db_instance_type: db.m6g.8xlarge
+      disk_type: gp3
+      disk_size_gb: "1024"
+      disk_iops: "40000"
+      disk_baseline_iops: "12000"
+      disk_baseline_throughput_mibps: "500"

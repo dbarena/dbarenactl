@@ -35,13 +35,16 @@ func TestFetch_FiltersToPostgresSingleAZ(t *testing.T) {
 		t.Fatalf("Fetch: %v", err)
 	}
 
-	if len(result.Items) != 4 {
-		t.Fatalf("got %d items, want 4 (instance+storage+iops+throughput; mysql/multi-az/licensed excluded): %+v", len(result.Items), result.Items)
+	if len(result.Items) != 6 {
+		t.Fatalf("got %d items, want 6 (instance+storage-gp3+storage-gp2+iops-gp3+iops-io1+throughput; mysql/multi-az/licensed excluded): %+v", len(result.Items), result.Items)
 	}
 
+	excludedFromByUnit := map[string]bool{"SKU_STORAGE_GP2": true, "SKU_IOPS_IO1": true}
 	byUnit := map[string]float64{}
 	for _, it := range result.Items {
-		byUnit[it.Unit] = it.PriceUSD
+		if !excludedFromByUnit[it.SKU] {
+			byUnit[it.Unit] = it.PriceUSD
+		}
 		if it.Region != "us-east-1" {
 			t.Errorf("item %+v: Region = %q, want us-east-1", it, it.Region)
 		}
@@ -64,10 +67,29 @@ func TestFetch_FiltersToPostgresSingleAZ(t *testing.T) {
 			}
 		case "SKU_STORAGE":
 			if it.Attributes["disk_type"] != "gp3" {
-				t.Errorf("storage item Attributes = %+v, want disk_type=gp3 (normalized from AWS's raw volumeType)", it.Attributes)
+				t.Errorf("storage item Attributes = %+v, want disk_type=gp3 (normalized from AWS's raw usagetype %q)", it.Attributes, "RDS:GP3-Storage")
 			}
 			if _, present := it.Attributes["volumeType"]; present {
 				t.Errorf("storage item Attributes = %+v, want no raw volumeType key", it.Attributes)
+			}
+		case "SKU_STORAGE_GP2":
+			// Regression check: AWS's raw usagetype for gp2 ("RDS:GP2-Storage")
+			// is not a substring of gp3's ("RDS:GP3-Storage"), so the two must
+			// not collapse onto the same disk_type.
+			if it.Attributes["disk_type"] != "gp2" {
+				t.Errorf("gp2 storage item Attributes = %+v, want disk_type=gp2, not collapsed onto gp3", it.Attributes)
+			}
+		case "SKU_IOPS":
+			if it.Attributes["disk_type"] != "gp3" {
+				t.Errorf("gp3 IOPS item Attributes = %+v, want disk_type=gp3", it.Attributes)
+			}
+		case "SKU_IOPS_IO1":
+			// Regression check: real AWS omits the volumeType attribute
+			// entirely on this SKU (unlike Database Storage products), so
+			// disk_type must come from usagetype ("RDS:PIOPS") instead, and
+			// must not collapse onto the gp3 IOPS SKU above.
+			if it.Attributes["disk_type"] != "io1" {
+				t.Errorf("io1 IOPS item Attributes = %+v, want disk_type=io1, not collapsed onto gp3", it.Attributes)
 			}
 		}
 		if it.Attributes["database_engine"] != "PostgreSQL" {
@@ -82,6 +104,24 @@ func TestFetch_FiltersToPostgresSingleAZ(t *testing.T) {
 
 	if !strings.Contains(result.Source, "us-east-1") {
 		t.Errorf("Source = %q, want it to mention the region", result.Source)
+	}
+}
+
+func TestDiskTypeFromUsageType(t *testing.T) {
+	cases := []struct{ usageType, want string }{
+		{"RDS:GP2-Storage", "gp2"},
+		{"RDS:GP3-Storage", "gp3"},
+		{"RDS:PIOPS-Storage", "io1"},
+		{"RDS:PIOPS-Storage-IO2", "io2"},
+		{"RDS:PIOPS", "io1"},
+		{"RDS:GP3-PIOPS", "gp3"},
+		{"RDS:IO2-PIOPS", "io2"},
+		{"RDS:GP3-Throughput", "gp3"},
+	}
+	for _, c := range cases {
+		if got := diskTypeFromUsageType(c.usageType); got != c.want {
+			t.Errorf("diskTypeFromUsageType(%q) = %q, want %q", c.usageType, got, c.want)
+		}
 	}
 }
 

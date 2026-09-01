@@ -1,6 +1,9 @@
 package main
 
 import (
+	"fmt"
+	"io"
+	"log/slog"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -19,6 +22,13 @@ and producing files ready to submit to the dbarena/results repo.`,
 }
 
 func Execute() {
+	if f, err := initLogging(); err != nil {
+		slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+		fmt.Fprintf(os.Stderr, "warning: could not open log file: %v\n", err)
+	} else {
+		defer f.Close() //nolint:errcheck
+	}
+
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}

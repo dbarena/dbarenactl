@@ -1,6 +1,9 @@
 package sweepid
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -106,6 +109,63 @@ func TestCompute_ManifestParamsOrderIndependent(t *testing.T) {
 	p2 := Params{Provider: "Supabase", Product: "Supabase", Plan: "Pro", ManifestParams: map[string]string{"b": "2", "a": "1"}}
 	if Compute(p1) != Compute(p2) {
 		t.Error("map iteration order should not affect the computed id")
+	}
+}
+
+// TestCompute_UnscopedHashUnaffectedByTestPointScopeField pins that an
+// unscoped Params (TestPointScope == "") hashes exactly the byte stream it
+// did before TestPointScope existed, by independently reimplementing that
+// exact pre-existing stream as an oracle. If this ever starts failing, every
+// already-existing sweep id (including any in-progress real sweep) would
+// silently stop being recognized by `run`/`resume`.
+func TestCompute_UnscopedHashUnaffectedByTestPointScopeField(t *testing.T) {
+	p := Params{
+		Provider: "Supabase", Product: "Supabase", Plan: "Pro", Workload: "tpcc",
+		ManifestContent: []byte("provider: Supabase\n"), MaxConcurrency: 8, Iterations: 3,
+		OnWorkloadFailure: "retry", MaxWorkloadFailures: 0,
+	}
+	got := Compute(p)
+
+	h := sha256.New()
+	fmt.Fprintf(h, "provider=%s\n", p.Provider)
+	fmt.Fprintf(h, "product=%s\n", p.Product)
+	fmt.Fprintf(h, "plan=%s\n", p.Plan)
+	fmt.Fprintf(h, "workload=%s\n", p.Workload)
+	fmt.Fprintf(h, "max_concurrency=%d\n", p.MaxConcurrency)
+	fmt.Fprintf(h, "iterations=%d\n", p.Iterations)
+	fmt.Fprintf(h, "on_workload_failure=%s\n", p.OnWorkloadFailure)
+	fmt.Fprintf(h, "max_workload_failures=%d\n", p.MaxWorkloadFailures)
+	h.Write(p.ManifestContent)
+	want := "supabase-pro-tpcc-" + hex.EncodeToString(h.Sum(nil))[:12]
+
+	if got != want {
+		t.Errorf("Compute() = %q, want %q (an unscoped id must never be affected by the TestPointScope field)", got, want)
+	}
+}
+
+func TestCompute_TestPointScope_DistinctFromUnscoped(t *testing.T) {
+	base := Params{Provider: "Supabase", Product: "Supabase", Plan: "Pro", Workload: "tpcc", ManifestContent: []byte("x")}
+	unscoped := Compute(base)
+
+	scoped := base
+	scoped.TestPointScope = "small/io"
+	got := Compute(scoped)
+
+	if got == unscoped {
+		t.Fatal("a scoped and unscoped sweep over otherwise-identical params must not collide on the same id")
+	}
+	if !strings.HasPrefix(got, "supabase-pro-tpcc-small-io-") {
+		t.Errorf("scoped id = %q, want the test point folded into the visible prefix", got)
+	}
+}
+
+func TestCompute_DifferentTestPointScopesDifferentIds(t *testing.T) {
+	base := Params{Provider: "Supabase", Product: "Supabase", Plan: "Pro", Workload: "tpcc", ManifestContent: []byte("x")}
+	a, b := base, base
+	a.TestPointScope = "small/io"
+	b.TestPointScope = "large/io/matched-to-rds"
+	if Compute(a) == Compute(b) {
+		t.Fatal("different test point scopes must not collide")
 	}
 }
 

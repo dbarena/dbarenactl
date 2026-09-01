@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -79,6 +80,7 @@ func (f *Fetcher) Fetch(ctx context.Context, providerID, region string) (*pricin
 		return nil, fmt.Errorf("aws: region is required")
 	}
 
+	slog.InfoContext(ctx, "aws: fetching RDS pricing", "url", f.offerURL(region))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.offerURL(region), nil)
 	if err != nil {
 		return nil, err
@@ -116,8 +118,10 @@ func (f *Fetcher) Fetch(ctx context.Context, providerID, region string) (*pricin
 }
 
 // extractItems keeps only PostgreSQL, Single-AZ products (additionally
-// requiring "No License required" for Database Instance rows), and builds
-// one Item per on-demand price dimension found for each.
+// requiring "No license required" for Database Instance rows, matched
+// case-insensitively since AWS's own docs/console title-case this value
+// while the Price List API returns it in sentence case), and builds one
+// Item per on-demand price dimension found for each.
 func extractItems(offer offerFile, region string) ([]pricing.Item, error) {
 	var items []pricing.Item
 	for sku, p := range offer.Products {
@@ -129,10 +133,10 @@ func extractItems(offer offerFile, region string) ([]pricing.Item, error) {
 		}
 		switch p.ProductFamily {
 		case "Database Instance":
-			if p.Attributes["licenseModel"] != "No License required" {
+			if !strings.EqualFold(p.Attributes["licenseModel"], "No license required") {
 				continue
 			}
-		case "Database Storage", "System Operation", "Provisioned Throughput":
+		case "Database Storage", "Provisioned IOPS", "Provisioned Throughput":
 			// no further filtering
 		default:
 			continue
@@ -164,32 +168,44 @@ func extractItems(offer offerFile, region string) ([]pricing.Item, error) {
 //   - "instanceType" becomes "db_instance_type", not "instance_type" --
 //     every candidate manifest already has an unrelated set.instance_type
 //     key naming the load driver's own machine type, not the database's.
-//   - "volumeType" becomes "disk_type", with AWS's own raw storage-class
-//     string mapped into the small gp3/io2 vocabulary shared with the
-//     Supabase fetcher, instead of being exposed as AWS's raw string.
+//   - "disk_type" is derived from AWS's "usagetype" SKU code (e.g.
+//     "RDS:GP3-Storage", "RDS:GP3-PIOPS", "RDS:PIOPS-Storage-IO2") into the
+//     small gp2/gp3/io1/io2 vocabulary shared with the Supabase fetcher.
+//     usagetype is used instead of the more obvious "volumeType" attribute
+//     because AWS omits volumeType entirely on some Provisioned IOPS SKUs
+//     (e.g. the gp3 and io1 IOPS-overage products), while usagetype is
+//     present and disk-type-specific on every Database Storage, Provisioned
+//     IOPS, and Provisioned Throughput product.
 func normalizeAttributes(raw map[string]string) map[string]string {
 	out := make(map[string]string, len(raw))
 	for k, v := range raw {
-		switch k {
-		case "instanceType":
+		if k == "instanceType" {
 			out["db_instance_type"] = v
-		case "volumeType":
-			if dt := diskTypeFromVolumeType(v); dt != "" {
-				out["disk_type"] = dt
-			}
-		default:
-			out[camelToSnake(k)] = v
+			continue
 		}
+		out[camelToSnake(k)] = v
+	}
+	if dt := diskTypeFromUsageType(raw["usagetype"]); dt != "" {
+		out["disk_type"] = dt
 	}
 	return out
 }
 
-func diskTypeFromVolumeType(v string) string {
+// diskTypeFromUsageType maps an AWS "usagetype" SKU code to dbarenactl's
+// gp2/gp3/io1/io2 vocabulary. The more specific "GP3"/"IO2" substrings are
+// checked before the plainer "GP2"/"PIOPS" ones they'd otherwise be
+// swallowed by -- e.g. "RDS:GP3-PIOPS" must resolve to gp3, not fall
+// through to the io1 "PIOPS" bucket.
+func diskTypeFromUsageType(u string) string {
 	switch {
-	case strings.Contains(v, "GP3") || strings.Contains(v, "General Purpose"):
+	case strings.Contains(u, "GP3"):
 		return "gp3"
-	case strings.Contains(v, "IO2") || strings.Contains(v, "Provisioned IOPS"):
+	case strings.Contains(u, "IO2"):
 		return "io2"
+	case strings.Contains(u, "GP2"):
+		return "gp2"
+	case strings.Contains(u, "PIOPS"):
+		return "io1"
 	default:
 		return ""
 	}

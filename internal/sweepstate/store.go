@@ -424,6 +424,33 @@ func (s *Store) ListNonTerminalRuns(sweepID string) ([]*Run, error) {
 	return out, rows.Err()
 }
 
+// ListRunsForTestPoint returns every run (including non-terminal, orphaned,
+// and failed ones) for a single test point, ordered by iteration attempt.
+// Unlike ListNonTerminalRuns, this includes terminal runs -- callers wanting
+// only successful, artifact-bearing runs (e.g. `dbarenactl results`) filter
+// on Outcome/LocalArtifactDir themselves.
+func (s *Store) ListRunsForTestPoint(testPointID string) ([]*Run, error) {
+	rows, err := s.db.Query(
+		`SELECT run_id, test_point_id, iteration_attempt, status, outcome, local_artifact_dir, fetch_attempts, created_at, updated_at
+		 FROM runs WHERE test_point_id = ? ORDER BY iteration_attempt`,
+		testPointID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("sweepstate: list runs for test point %s: %w", testPointID, err)
+	}
+	defer rows.Close()
+
+	var out []*Run
+	for rows.Next() {
+		run, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, run)
+	}
+	return out, rows.Err()
+}
+
 func scanRun(r rowScanner) (*Run, error) {
 	var run Run
 	var status string

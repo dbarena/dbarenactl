@@ -6,7 +6,7 @@
       "attributes": {
         "databaseEngine": "PostgreSQL",
         "deploymentOption": "Single-AZ",
-        "licenseModel": "No License required",
+        "licenseModel": "No license required",
         "instanceType": "db.t4g.small"
       }
     },
@@ -15,21 +15,41 @@
       "attributes": {
         "databaseEngine": "PostgreSQL",
         "deploymentOption": "Single-AZ",
-        "volumeType": "General Purpose-GP3"
+        "volumeType": "General Purpose-GP3",
+        "usagetype": "RDS:GP3-Storage"
+      }
+    },
+    "SKU_STORAGE_GP2": {
+      "productFamily": "Database Storage",
+      "attributes": {
+        "databaseEngine": "PostgreSQL",
+        "deploymentOption": "Single-AZ",
+        "volumeType": "General Purpose",
+        "usagetype": "RDS:GP2-Storage"
       }
     },
     "SKU_IOPS": {
-      "productFamily": "System Operation",
+      "productFamily": "Provisioned IOPS",
       "attributes": {
         "databaseEngine": "PostgreSQL",
-        "deploymentOption": "Single-AZ"
+        "deploymentOption": "Single-AZ",
+        "usagetype": "RDS:GP3-PIOPS"
+      }
+    },
+    "SKU_IOPS_IO1": {
+      "productFamily": "Provisioned IOPS",
+      "attributes": {
+        "databaseEngine": "PostgreSQL",
+        "deploymentOption": "Single-AZ",
+        "usagetype": "RDS:PIOPS"
       }
     },
     "SKU_THROUGHPUT": {
       "productFamily": "Provisioned Throughput",
       "attributes": {
         "databaseEngine": "PostgreSQL",
-        "deploymentOption": "Single-AZ"
+        "deploymentOption": "Single-AZ",
+        "usagetype": "RDS:GP3-Throughput"
       }
     },
     "SKU_MYSQL": {
@@ -37,7 +57,7 @@
       "attributes": {
         "databaseEngine": "MySQL",
         "deploymentOption": "Single-AZ",
-        "licenseModel": "No License required",
+        "licenseModel": "No license required",
         "instanceType": "db.t4g.small"
       }
     },
@@ -46,7 +66,7 @@
       "attributes": {
         "databaseEngine": "PostgreSQL",
         "deploymentOption": "Multi-AZ",
-        "licenseModel": "No License required",
+        "licenseModel": "No license required",
         "instanceType": "db.t4g.small"
       }
     },
@@ -84,6 +104,17 @@
           }
         }
       },
+      "SKU_STORAGE_GP2": {
+        "SKU_STORAGE_GP2.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU_STORAGE_GP2.JRTCKXETXF.6YS6EN2CT7": {
+              "description": "$0.10 per GB-Mo of gp2 provisioned storage",
+              "unit": "GB-Mo",
+              "pricePerUnit": {"USD": "0.1000000000"}
+            }
+          }
+        }
+      },
       "SKU_IOPS": {
         "SKU_IOPS.JRTCKXETXF": {
           "priceDimensions": {
@@ -91,6 +122,17 @@
               "description": "$0.02 per IOPS-Month of gp3 provisioned IOPS",
               "unit": "IOPS-Mo",
               "pricePerUnit": {"USD": "0.0200000000"}
+            }
+          }
+        }
+      },
+      "SKU_IOPS_IO1": {
+        "SKU_IOPS_IO1.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU_IOPS_IO1.JRTCKXETXF.6YS6EN2CT7": {
+              "description": "$0.10 per IOPS-Month of io1 provisioned IOPS",
+              "unit": "IOPS-Mo",
+              "pricePerUnit": {"USD": "0.1000000000"}
             }
           }
         }

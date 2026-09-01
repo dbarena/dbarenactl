@@ -112,6 +112,38 @@ actually run against.
 ./dbarenactl pricing show aws/rds
 ```
 
+## Results
+
+`dbarenactl results <sweep-id>` assembles one `result.json` per test point, ready to submit
+as a PR to `dbarena/dbarena`. For each test point it picks the one successful iteration
+whose peak-concurrency throughput is the median among that test point's iterations, and
+reports every field from that run alone -- iterations are never pooled or averaged
+together. Instance sizing (`db_instance_type`, `disk_size_gb`, `disk_iops`, `disk_type`,
+`disk_throughput_mibps`, and, for AWS tiers that cross a storage-baseline threshold,
+`disk_baseline_iops`/`disk_baseline_throughput_mibps`) is read from the candidate
+manifest's `set:` block, so re-running `results` after a manifest correction always
+reflects the corrected values, even for a sweep that ran before the correction. If a
+pricing snapshot is cached for the sweep's provider/product/plan/region, its monthly cost
+is computed and included (with a full per-component breakdown logged to
+`~/.dbarenactl/sweeps/<sweep-id>/logs/pricing-audit.log` for review before publishing);
+otherwise the result is still written, with `pricing: null` and a warning.
+
+```bash
+# Fetch pricing first (optional, but needed for cost data in the output)
+./dbarenactl pricing fetch --candidate candidates/aws-rds-tpcc.yaml
+
+# Write results/<provider>/<workload>/<scenario>/result.json for every test point
+# that reached its required number of successful iterations
+./dbarenactl results aws-rds-tpcc-2ed91ebe843e
+
+# From a dbarena checkout (or a directory with one as a sibling), results/index.json
+# is updated automatically. Otherwise, --dest picks the destination explicitly.
+./dbarenactl results aws-rds-tpcc-2ed91ebe843e --dest ../dbarena
+
+# Emit a result even for a test point short of its required iterations
+./dbarenactl results aws-rds-tpcc-2ed91ebe843e --force
+```
+
 ## Command reference
 
 | Command | Description |
@@ -121,7 +153,7 @@ actually run against.
 | `dbarenactl resume [sweep-id]` | Continue an incomplete sweep, or list incomplete sweeps if no id is given |
 | `dbarenactl status [sweep-id]` | Show sweep progress, or list incomplete sweeps if no id is given |
 | `dbarenactl delete <sweep-id>` | Permanently delete a sweep's state and tear down associated infrastructure |
-| `dbarenactl results <sweep-id>` | Assemble a results file from a sweep's artifacts (not yet implemented) |
+| `dbarenactl results <sweep-id> [--dest <dir>] [--candidate <manifest>] [--force]` | Assemble `result.json` files from a sweep's fetched artifacts, ready for a `dbarena/dbarena` PR |
 | `dbarenactl pricing fetch --candidate <manifest>` | Fetch and record a pricing snapshot from a provider's own primary source (aws/rds, gcp/cloudsql, gcp/cloudsql-enterprise-plus, supabase); provider and region are derived from the manifest |
 | `dbarenactl pricing set --candidate <manifest> --file <items.json>` | Manually record a pricing snapshot for a provider with no automated source |
 | `dbarenactl pricing list [--provider <p>] [--all]` | List cached pricing snapshots (latest per provider/region by default, `--all` for full history) |

@@ -91,6 +91,33 @@ func (d TestPointDef) Key() string {
 	return d.Tier + "/" + d.BoundType + "/" + d.Variant
 }
 
+// ParseTestPointRef splits a "tier/bound_type" or "tier/bound_type/variant"
+// string -- matching TestPointDef.Key()'s own format exactly -- into its
+// parts, e.g. for `dbarenactl run --test-point <ref>`.
+func ParseTestPointRef(ref string) (tier, boundType, variant string, err error) {
+	parts := strings.Split(ref, "/")
+	switch len(parts) {
+	case 2:
+		return parts[0], parts[1], "", nil
+	case 3:
+		return parts[0], parts[1], parts[2], nil
+	default:
+		return "", "", "", fmt.Errorf("invalid test point reference %q -- expected tier/bound_type or tier/bound_type/variant", ref)
+	}
+}
+
+// FindTestPoint returns the test point matching tier/boundType/variant, if
+// any.
+func (m *Manifest) FindTestPoint(tier, boundType, variant string) (*TestPointDef, bool) {
+	for i := range m.TestPoints {
+		d := &m.TestPoints[i]
+		if d.Tier == tier && d.BoundType == boundType && d.Variant == variant {
+			return d, true
+		}
+	}
+	return nil, false
+}
+
 // Manifest describes every test point required for one provider's sweep.
 type Manifest struct {
 	// Provider is the cloud/platform this manifest covers: one of

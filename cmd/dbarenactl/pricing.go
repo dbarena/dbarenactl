@@ -15,6 +15,7 @@ import (
 
 	"github.com/dbarena/dbarenactl/internal/manifest"
 	"github.com/dbarena/dbarenactl/internal/pricing"
+	"github.com/dbarena/dbarenactl/internal/ui"
 )
 
 var (
@@ -120,12 +121,18 @@ func runPricingFetch(cmd *cobra.Command, _ []string) error {
 			pricingFetchCandidate, displayName(m))
 	}
 
+	sp := ui.New(fmt.Sprintf("Fetching %s pricing for %s", displayName(m), m.Region))
+	sp.Start()
+	fetchStart := time.Now()
 	result, err := fetcher.Fetch(cmd.Context(), m.PricingFetcherKey(), m.Region)
 	if err != nil {
+		sp.Fail(fmt.Sprintf("Fetching %s pricing for %s failed: %v", displayName(m), m.Region, err))
 		return fmt.Errorf(
 			"dbarenactl pricing fetch %s: %w -- if this persists, use `dbarenactl pricing set --candidate %s --file <path>` to record a snapshot manually",
 			displayName(m), err, pricingFetchCandidate)
 	}
+	sp.Succeed(fmt.Sprintf("Fetched %s pricing for %s (%d items, %.1fs)",
+		displayName(m), m.Region, len(result.Items), time.Since(fetchStart).Seconds()))
 
 	id, err := newSnapshotID()
 	if err != nil {

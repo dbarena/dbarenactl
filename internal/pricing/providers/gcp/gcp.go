@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"os/exec"
 	"strconv"
@@ -87,6 +88,7 @@ func (f *Fetcher) accessToken(ctx context.Context) (string, error) {
 // started" (missing/unusable binary, deterministic on every retry) and "the
 // process ran but failed" (no active credentials).
 func gcloudAccessToken(ctx context.Context) (string, error) {
+	slog.InfoContext(ctx, "gcp: obtaining access token", "command", "gcloud auth print-access-token")
 	cmd := exec.CommandContext(ctx, "gcloud", "auth", "print-access-token")
 	out, err := cmd.Output()
 	if err != nil {
@@ -256,6 +258,7 @@ func (f *Fetcher) listSKUs(ctx context.Context, token, serviceName string) ([]sk
 }
 
 func (f *Fetcher) apiGet(ctx context.Context, token, url string, out any) error {
+	slog.InfoContext(ctx, "gcp: fetching pricing catalog", "url", url)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err

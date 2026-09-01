@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -54,6 +55,7 @@ func (f *Fetcher) url() string {
 // accepted for interface compatibility but ignored -- Supabase pricing
 // isn't region-scoped -- so every returned Item has Region == "".
 func (f *Fetcher) Fetch(ctx context.Context, providerID, region string) (*pricing.FetchResult, error) {
+	slog.InfoContext(ctx, "supabase: fetching pricing", "url", f.url())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.url(), nil)
 	if err != nil {
 		return nil, err

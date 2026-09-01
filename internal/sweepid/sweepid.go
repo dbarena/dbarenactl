@@ -44,15 +44,31 @@ type Params struct {
 	// at different target infrastructure entirely -- not a continuation of
 	// an existing one.
 	ManifestParams map[string]string
+	// TestPointScope is `--test-point`'s raw value (e.g. "small/io"), empty
+	// for an ordinary unscoped sweep covering every test point in the
+	// manifest. Left out of the hash/prefix entirely when empty -- see
+	// Compute's doc comment for why that matters.
+	TestPointScope string
 }
 
 var nonSlugChars = regexp.MustCompile(`[^a-z0-9]+`)
 
-// Compute returns a readable provider[-plan]-workload slug followed by a
-// short hash of every parameter in p, e.g. "gcp-enterprise-plus-tpcc-3f9a1c2b8e47".
+// Compute returns a readable provider[-plan]-workload[-test-point]-scope
+// slug followed by a short hash of every parameter in p, e.g.
+// "gcp-enterprise-plus-tpcc-3f9a1c2b8e47" (unscoped) or
+// "supabase-tpcc-small-io-9c1a2f8e0b3d" (scoped to test point "small/io").
 // Product is hashed but deliberately left out of the readable prefix -- it's
 // redundant with Provider today, and status/resume show it as its own
 // column instead of lengthening every id for a case that doesn't exist yet.
+//
+// TestPointScope is folded into the hash and prefix only when non-empty.
+// This is deliberate, not an oversight: writing it unconditionally (even as
+// an empty "test_point_scope=\n" line) would change the hash input -- and
+// therefore the computed id -- for every ordinary unscoped sweep too, since
+// that line wasn't part of the hash before TestPointScope existed. That
+// would make `dbarenactl run`/`resume` stop recognizing already-existing
+// sweeps under their current ids. Conditioning on non-empty keeps the
+// unscoped path byte-for-byte identical to before this field was added.
 func Compute(p Params) string {
 	h := sha256.New()
 	fmt.Fprintf(h, "provider=%s\n", p.Provider)
@@ -71,6 +87,9 @@ func Compute(p Params) string {
 	for _, k := range keys {
 		fmt.Fprintf(h, "param.%s=%s\n", k, p.ManifestParams[k])
 	}
+	if p.TestPointScope != "" {
+		fmt.Fprintf(h, "test_point_scope=%s\n", p.TestPointScope)
+	}
 	h.Write(p.ManifestContent)
 	sum := hex.EncodeToString(h.Sum(nil))[:12]
 
@@ -79,6 +98,9 @@ func Compute(p Params) string {
 		prefix += "-" + slugify(p.Plan)
 	}
 	prefix += "-" + slugify(p.Workload)
+	if p.TestPointScope != "" {
+		prefix += "-" + slugify(p.TestPointScope)
+	}
 	return prefix + "-" + sum
 }
 

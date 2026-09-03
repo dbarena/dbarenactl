@@ -25,6 +25,7 @@ import (
 	"github.com/dbarena/dbarenactl/internal/bench"
 	"github.com/dbarena/dbarenactl/internal/planner"
 	"github.com/dbarena/dbarenactl/internal/sweepstate"
+	"github.com/dbarena/dbarenactl/internal/ui"
 )
 
 // Sweep-wide error actions recorded in Sweep.ErrorAction. Distinguishes what
@@ -86,8 +87,45 @@ func (s *Scheduler) now() time.Time {
 
 func (s *Scheduler) logf(format string, args ...any) {
 	if s.Out != nil {
-		fmt.Fprintf(s.Out, format+"\n", args...)
+		fmt.Fprintf(s.Out, "[%s] "+format+"\n", append([]any{s.timestamp()}, args...)...)
 	}
+}
+
+// timestamp renders s.now() as an RFC3339 UTC timestamp, for stamping when a
+// line first appears (logf's own lines, and a spinner's start/finish lines
+// via stamp).
+func (s *Scheduler) timestamp() string {
+	return s.now().UTC().Format(time.RFC3339)
+}
+
+// stamp prefixes message with the current timestamp, for one-off spinner
+// messages (Start/Succeed/Fail) that logf's own formatting doesn't cover.
+func (s *Scheduler) stamp(message string) string {
+	return fmt.Sprintf("[%s] %s", s.timestamp(), message)
+}
+
+// markf writes one stamped line prefixed with a "✓"/"✗" mark, for terminal
+// events discovered by polling rather than by dbarenactl itself blocking on
+// a call (e.g. workload completion) -- there's no local operation to spin
+// through, but the outcome still deserves the same success/failure marker
+// as the spinner-backed lines, for visual consistency.
+func (s *Scheduler) markf(mark, format string, args ...any) {
+	if s.Out == nil {
+		return
+	}
+	fmt.Fprintln(s.Out, mark+" "+s.stamp(fmt.Sprintf(format, args...)))
+}
+
+// spinner returns a Spinner for one launch/teardown operation, writing
+// through the same Out as logf (so production gets a real animated spinner
+// on a terminal, and tests get the same plain start/end lines logf itself
+// would produce).
+func (s *Scheduler) spinner(message string) *ui.Spinner {
+	out := s.Out
+	if out == nil {
+		out = io.Discard
+	}
+	return ui.NewWithWriter(out, s.stamp(message))
 }
 
 // RunSweep drives sweepID to completion, polling at opts.PollInterval when a
@@ -317,14 +355,18 @@ func (s *Scheduler) reconcileLaunching(ctx context.Context, sweepID string, run 
 	// Orphaned: local provisioning either never finished or never got
 	// handed off in time. Infra may exist -- tear it down before discarding
 	// the row so a fresh attempt gets a clean slate.
-	s.logf("%s: launch left an orphaned environment; tearing down before retrying", run.RunID)
+	sp := s.spinner(fmt.Sprintf("%s: launch left an orphaned environment; tearing down before retrying", run.RunID))
+	sp.Start()
+	start := time.Now()
+	defer func() { sp.Fail(s.stamp(fmt.Sprintf("%s: orphaned teardown did not finish", run.RunID))) }()
 	if err := s.Bench.Teardown(ctx, run.RunID); err != nil {
+		sp.Fail(s.stamp(fmt.Sprintf("%s: tear down orphaned environment failed: %v", run.RunID, err)))
 		if rerr := s.Store.RecordError(sweepID, ActionTeardown, run.RunID, err.Error()); rerr != nil {
 			return false, rerr
 		}
 		return false, fmt.Errorf("tear down orphaned run %s: %w", run.RunID, err)
 	}
-	s.logf("%s: orphaned environment torn down", run.RunID)
+	sp.Succeed(s.stamp(fmt.Sprintf("%s: orphaned environment torn down in %s", run.RunID, time.Since(start).Round(time.Second))))
 	return true, s.Store.DeleteRun(run.RunID)
 }
 
@@ -352,20 +394,25 @@ func (s *Scheduler) reconcileWaitingRemote(ctx context.Context, sweepID string, 
 
 	if rs.CompletedAt == nil {
 		if rs.TerminatedWithoutCompleting() {
-			s.logf("%s: environment terminated without the workload completing -- finalizing as failed", run.RunID)
+			s.markf("✗", "%s: environment terminated without the workload completing after %s -- finalizing as failed",
+				run.RunID, s.now().Sub(run.CreatedAt).Round(time.Second))
 			return true, s.Store.FinalizeRun(run.RunID, "failure")
 		}
 		return false, nil
 	}
 
-	outcome := "success"
+	outcome, mark := "success", "✓"
 	if rs.Error != "" {
-		outcome = "failure"
+		outcome, mark = "failure", "✗"
 	}
 	if err := s.Store.SetRunOutcome(run.RunID, outcome); err != nil {
 		return false, err
 	}
-	s.logf("%s: workload finished (%s)", run.RunID, outcome)
+	// run.CreatedAt is when dbarenactl first committed to launching this run
+	// (see launch()) -- the easiest available proxy for "since the
+	// environment was launched." Workloads run for hours to days, so
+	// rounding to the second is plenty accurate.
+	s.markf(mark, "%s: workload finished (%s) after %s", run.RunID, outcome, s.now().Sub(run.CreatedAt).Round(time.Second))
 	return true, s.Store.SetRunStatus(run.RunID, sweepstate.RunNeedsResultsPull)
 }
 
@@ -386,9 +433,13 @@ func (s *Scheduler) reconcileNeedsResultsPull(ctx context.Context, sweepID strin
 	}
 
 	dest := filepath.Join(opts.ArtifactBaseDir, run.RunID)
-	s.logf("%s: fetching results", run.RunID)
+	sp := s.spinner(fmt.Sprintf("%s: fetching results", run.RunID))
+	sp.Start()
+	start := time.Now()
+	defer func() { sp.Fail(s.stamp(fmt.Sprintf("%s: fetch did not finish", run.RunID))) }()
 	fetchErr := s.Bench.Fetch(ctx, run.RunID, dest)
 	if fetchErr == nil {
+		sp.Succeed(s.stamp(fmt.Sprintf("%s: results fetched in %s", run.RunID, time.Since(start).Round(time.Second))))
 		if err := s.Store.SetRunArtifactDir(run.RunID, dest); err != nil {
 			return false, err
 		}
@@ -396,6 +447,7 @@ func (s *Scheduler) reconcileNeedsResultsPull(ctx context.Context, sweepID strin
 	}
 
 	if errors.Is(fetchErr, bench.ErrBenchctlUnusable) {
+		sp.Fail(s.stamp(fmt.Sprintf("%s: fetch failed: %v", run.RunID, fetchErr)))
 		if rerr := s.Store.RecordError(sweepID, ActionFetch, run.RunID, fetchErr.Error()); rerr != nil {
 			return false, rerr
 		}
@@ -404,12 +456,14 @@ func (s *Scheduler) reconcileNeedsResultsPull(ctx context.Context, sweepID strin
 
 	n, err := s.Store.IncrementFetchAttempts(run.RunID)
 	if err != nil {
+		sp.Fail(s.stamp(fmt.Sprintf("%s: fetch failed: %v", run.RunID, fetchErr)))
 		return false, err
 	}
 	if n < opts.FetchRetryLimit {
-		s.logf("warning: fetch %s failed (attempt %d/%d), will retry: %v", run.RunID, n, opts.FetchRetryLimit, fetchErr)
+		sp.Fail(s.stamp(fmt.Sprintf("%s: fetch failed (attempt %d/%d), will retry: %v", run.RunID, n, opts.FetchRetryLimit, fetchErr)))
 		return false, nil
 	}
+	sp.Fail(s.stamp(fmt.Sprintf("%s: fetch failed permanently after %d attempts: %v", run.RunID, n, fetchErr)))
 	detail := fmt.Sprintf("results-pull failed %d times: %v", n, fetchErr)
 	if rerr := s.Store.RecordError(sweepID, ActionFetch, run.RunID, detail); rerr != nil {
 		return false, rerr
@@ -418,20 +472,28 @@ func (s *Scheduler) reconcileNeedsResultsPull(ctx context.Context, sweepID strin
 }
 
 func (s *Scheduler) reconcileNeedsTeardown(ctx context.Context, sweepID string, run *sweepstate.Run) (bool, error) {
-	s.logf("%s: tearing down", run.RunID)
+	sp := s.spinner(fmt.Sprintf("%s: tearing down", run.RunID))
+	sp.Start()
+	start := time.Now()
+	defer func() { sp.Fail(s.stamp(fmt.Sprintf("%s: teardown did not finish", run.RunID))) }()
 	if err := s.Bench.Teardown(ctx, run.RunID); err != nil {
+		sp.Fail(s.stamp(fmt.Sprintf("%s: tear down failed: %v", run.RunID, err)))
 		if rerr := s.Store.RecordError(sweepID, ActionTeardown, run.RunID, err.Error()); rerr != nil {
 			return false, rerr
 		}
 		return false, fmt.Errorf("tear down %s: %w", run.RunID, err)
 	}
 	if err := s.Store.FinalizeRun(run.RunID, run.Outcome); err != nil {
+		sp.Fail(s.stamp(fmt.Sprintf("%s: torn down, but finalizing failed: %v", run.RunID, err)))
 		return false, err
 	}
+	elapsed := time.Since(start).Round(time.Second)
+	msg := fmt.Sprintf("%s: torn down in %s", run.RunID, elapsed)
 	if tp, err := s.Store.GetTestPoint(run.TestPointID); err == nil {
-		s.logf("%s: torn down -- %s now %d/%d successes, %d/%d failures",
-			run.RunID, run.TestPointID, tp.SuccessesCount, tp.SuccessesNeeded, tp.FailuresCount, tp.FailureBudget)
+		msg = fmt.Sprintf("%s: torn down in %s -- %s now %d/%d successes, %d/%d failures",
+			run.RunID, elapsed, run.TestPointID, tp.SuccessesCount, tp.SuccessesNeeded, tp.FailuresCount, tp.FailureBudget)
 	}
+	sp.Succeed(s.stamp(msg))
 	return true, nil
 }
 
@@ -445,15 +507,19 @@ func (s *Scheduler) launch(ctx context.Context, sweepID string, tp *sweepstate.T
 	if err := s.Store.CreateRun(run); err != nil {
 		return err
 	}
-	s.logf("launching %s (run %s, attempt %d)", tp.ID, runID, attempt)
+	sp := s.spinner(fmt.Sprintf("launching %s (run %s, attempt %d)", tp.ID, runID, attempt))
+	sp.Start()
+	start := time.Now()
+	defer func() { sp.Fail(s.stamp(fmt.Sprintf("%s: launch did not finish", runID))) }()
 
 	if err := s.Bench.LaunchAsync(ctx, runID, tp.Scenario, tp.Set); err != nil {
+		sp.Fail(s.stamp(fmt.Sprintf("launch %s failed: %v", runID, err)))
 		if rerr := s.Store.RecordError(sweepID, ActionLaunch, runID, err.Error()); rerr != nil {
 			return rerr
 		}
 		return fmt.Errorf("launch %s: %w", runID, err)
 	}
-	s.logf("%s: provisioned, workload running remotely", runID)
+	sp.Succeed(s.stamp(fmt.Sprintf("%s: provisioned in %s, workload running remotely", runID, time.Since(start).Round(time.Second))))
 	return s.Store.SetRunStatus(runID, sweepstate.RunWaitingRemote)
 }
 

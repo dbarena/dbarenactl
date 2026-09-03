@@ -210,12 +210,15 @@ func TestStep_LogsLaunchFinishAndTeardownProgress(t *testing.T) {
 		t.Fatalf("teardown step: %v", err)
 	}
 	tearingDownIdx := strings.Index(out.String(), runID+": tearing down")
-	tornDownIdx := strings.Index(out.String(), runID+": torn down -- sweep-1-small-io now 1/1 successes, 0/1 failures")
+	tornDownIdx := strings.Index(out.String(), runID+": torn down in ")
 	if tearingDownIdx == -1 {
 		t.Errorf("output missing tearing-down line: %q", out.String())
 	}
 	if tornDownIdx == -1 {
 		t.Errorf("output missing teardown line: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "-- sweep-1-small-io now 1/1 successes, 0/1 failures") {
+		t.Errorf("output missing test point tally: %q", out.String())
 	}
 	if tearingDownIdx != -1 && tornDownIdx != -1 && tearingDownIdx > tornDownIdx {
 		t.Errorf("expected \"tearing down\" to precede \"torn down\": %q", out.String())

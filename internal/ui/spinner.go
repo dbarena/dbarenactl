@@ -36,10 +36,23 @@ type Spinner struct {
 // New returns a Spinner that writes to os.Stderr, so it never interleaves
 // with a command's actual stdout output (e.g. printSnapshotSummary).
 func New(message string) *Spinner {
+	return NewWithWriter(os.Stderr, message)
+}
+
+// NewWithWriter returns a Spinner that writes to out instead of os.Stderr,
+// for callers that inject their own writer (e.g. a component that already
+// takes an io.Writer for testability). TTY detection only applies when out
+// is *os.File -- anything else degrades to the same plain start/end lines
+// non-interactive contexts already get.
+func NewWithWriter(out io.Writer, message string) *Spinner {
+	isTTY := false
+	if f, ok := out.(*os.File); ok {
+		isTTY = isatty.IsTerminal(f.Fd())
+	}
 	return &Spinner{
 		message: message,
-		out:     os.Stderr,
-		isTTY:   isatty.IsTerminal(os.Stderr.Fd()),
+		out:     out,
+		isTTY:   isTTY,
 	}
 }
 
@@ -73,7 +86,7 @@ func (s *Spinner) animate() {
 		case <-s.stop:
 			return
 		case <-ticker.C:
-			fmt.Fprintf(s.out, "\r\x1b[2K%s %s...", spinnerFrames[frame%len(spinnerFrames)], s.message)
+			fmt.Fprintf(s.out, "\r\x1b[2K%s %s", spinnerFrames[frame%len(spinnerFrames)], s.message)
 			frame++
 		}
 	}

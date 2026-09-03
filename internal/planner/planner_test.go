@@ -84,6 +84,38 @@ func TestNewRunID_UniqueAcrossCalls(t *testing.T) {
 	}
 }
 
+func TestNewRunID_CapsLengthForLongTestPointID(t *testing.T) {
+	// Mirrors the id shape that triggered GCP's "label value must be at
+	// most 63 characters" error: a sweep id plus a long tier/bound_type/
+	// variant combination.
+	long := "gcp-enterprise-tpcc-64479882755c-2xlarge-compute-cal-2x"
+	a := NewRunID(long, 1)
+	if len(a) > maxRunIDLen {
+		t.Errorf("len(NewRunID(...)) = %d, want <= %d (id = %q)", len(a), maxRunIDLen, a)
+	}
+
+	b := NewRunID(long, 1)
+	if a == b {
+		t.Error("NewRunID should not produce the same id twice, even for the same over-length test point/attempt")
+	}
+	// The shortened prefix (everything before the trailing "-<attempt>-<random>")
+	// should still be deterministic across calls for the same input.
+	aPrefix := strings.TrimSuffix(a, a[strings.LastIndex(a, "-1-"):])
+	bPrefix := strings.TrimSuffix(b, b[strings.LastIndex(b, "-1-"):])
+	if aPrefix != bPrefix {
+		t.Errorf("shortened prefix should be deterministic: %q != %q", aPrefix, bPrefix)
+	}
+}
+
+func TestNewRunID_ShortTestPointIDUnaffectedByCap(t *testing.T) {
+	// Ids that already fit within maxRunIDLen must be produced exactly as
+	// before -- the cap only changes shape for the over-length case.
+	got := NewRunID("aws-rds-abc123-small-io", 3)
+	if !strings.HasPrefix(got, "aws-rds-abc123-small-io-3-") {
+		t.Errorf("got = %q", got)
+	}
+}
+
 func TestLaunchCommand_String(t *testing.T) {
 	c := LaunchCommand{
 		RunID:        "run-1",

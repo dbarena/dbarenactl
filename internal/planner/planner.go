@@ -7,6 +7,7 @@ package planner
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"sort"
@@ -17,6 +18,13 @@ import (
 	"github.com/dbarena/dbarenactl/internal/sweepid"
 	"github.com/dbarena/dbarenactl/internal/sweepstate"
 )
+
+// maxRunIDLen is the longest run id NewRunID will ever produce. It's set to
+// 63 -- GCP Compute Engine's label-value length limit -- because a run id
+// flows unmodified from benchctl into a "run-id" instance label on GCP
+// targets, and that's the tightest constraint found anywhere downstream of
+// it; every other provider tolerates ids at least this long.
+const maxRunIDLen = 63
 
 // TestPointID deterministically derives a test point's row id from the
 // sweep id and its tier/bound_type/variant. Deterministic (not random) so
@@ -60,10 +68,31 @@ func BuildTestPoints(sweepID string, m *manifest.Manifest, successesNeeded, fail
 // handling) -- so a short random suffix guarantees no collision with a
 // run id benchctl already has a record for, matching the uniqueness benchctl
 // itself now enforces on caller-supplied --run-id values.
+//
+// The result is capped at maxRunIDLen. Test points with a long tier/
+// bound_type/variant combination can otherwise push the id past what GCP
+// accepts as a label value; when that would happen, testPointID is
+// deterministically shortened (a truncated prefix plus a content hash, so
+// two different over-length ids that happen to share a prefix still can't
+// collide) before the attempt/random suffix is appended. Ids that already
+// fit are returned exactly as before -- this only changes shape for the
+// over-length case.
 func NewRunID(testPointID string, attempt int) string {
 	var b [3]byte
 	_, _ = rand.Read(b[:])
-	return testPointID + "-" + strconv.Itoa(attempt) + "-" + hex.EncodeToString(b[:])
+	suffix := "-" + strconv.Itoa(attempt) + "-" + hex.EncodeToString(b[:])
+
+	budget := maxRunIDLen - len(suffix)
+	if len(testPointID) > budget {
+		sum := sha256.Sum256([]byte(testPointID))
+		hash := hex.EncodeToString(sum[:])[:8]
+		keep := budget - 1 - len(hash)
+		if keep < 0 {
+			keep = 0
+		}
+		testPointID = strings.TrimRight(testPointID[:keep], "-") + "-" + hash
+	}
+	return testPointID + suffix
 }
 
 // LaunchCommand describes one `benchctl run --async` invocation a dry run

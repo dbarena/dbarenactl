@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -26,6 +27,7 @@ var (
 	runDryRun              bool
 	runBenchctlBin         string
 	runSetParams           []string
+	runTestPoint           string
 )
 
 var runCmd = &cobra.Command{
@@ -44,6 +46,9 @@ func init() {
 	runCmd.Flags().BoolVar(&runDryRun, "dry-run", false, "Preview the benchctl invocations this sweep would make, without touching anything")
 	runCmd.Flags().StringVar(&runBenchctlBin, "benchctl-bin", "benchctl", "Path to the benchctl binary")
 	runCmd.Flags().StringArrayVar(&runSetParams, "set", nil, "Set a manifest parameter referenced as {{ params.NAME }} in the manifest (key=value, repeatable), e.g. --set supabase_org_id=abc1234")
+	runCmd.Flags().StringVar(&runTestPoint, "test-point", "",
+		"Restrict this sweep to one test point, e.g. small/io or large/io/matched-to-rds (see the manifest's "+
+			"test_points) -- omit to run every test point in the manifest")
 	_ = runCmd.MarkFlagRequired("candidate")
 }
 
@@ -97,8 +102,27 @@ func runRun(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	if runTestPoint != "" {
+		tier, boundType, variant, err := manifest.ParseTestPointRef(runTestPoint)
+		if err != nil {
+			return fmt.Errorf("--test-point: %w", err)
+		}
+		def, ok := m.FindTestPoint(tier, boundType, variant)
+		if !ok {
+			keys := make([]string, len(m.TestPoints))
+			for i, d := range m.TestPoints {
+				keys[i] = d.Key()
+			}
+			return fmt.Errorf("--test-point %q: no matching test point in %s (available: %s)",
+				runTestPoint, runCandidate, strings.Join(keys, ", "))
+		}
+		m.TestPoints = []manifest.TestPointDef{*def}
+	}
+
 	sweepID := sweepid.Compute(sweepid.Params{
 		Provider:            m.Provider,
+		Product:             m.Product,
+		Plan:                m.Plan,
 		Workload:            m.Workload,
 		ManifestContent:     manifestContent,
 		MaxConcurrency:      runMaxConcurrency,
@@ -106,6 +130,7 @@ func runRun(cmd *cobra.Command, _ []string) error {
 		OnWorkloadFailure:   runOnWorkloadFailure,
 		MaxWorkloadFailures: runMaxWorkloadFailures,
 		ManifestParams:      manifestParams,
+		TestPointScope:      runTestPoint,
 	})
 
 	if runDryRun {
@@ -161,15 +186,26 @@ func runRun(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	// Stored absolute so `dbarenactl results` (or anything else reloading this
+	// sweep's manifest later) resolves it correctly regardless of the cwd it's
+	// invoked from -- mirrors why manifest.Load resolves ScenarioPath to
+	// absolute for the exact same reason.
+	absManifestPath, err := filepath.Abs(runCandidate)
+	if err != nil {
+		return fmt.Errorf("resolve candidate manifest path %q: %w", runCandidate, err)
+	}
 	params := sweepParams{
-		Provider: m.Provider, Workload: m.Workload, ManifestPath: runCandidate, MaxConcurrency: runMaxConcurrency,
+		Provider: m.Provider, Product: m.Product, Plan: m.Plan, Workload: m.Workload, ManifestPath: absManifestPath, MaxConcurrency: runMaxConcurrency,
 		Iterations: runIterations, OnWorkloadFailure: runOnWorkloadFailure, MaxWorkloadFailures: runMaxWorkloadFailures,
 	}
 	paramsJSON, err := json.Marshal(params)
 	if err != nil {
 		return err
 	}
-	sweep := &sweepstate.Sweep{ID: sweepID, Provider: m.Provider, Workload: m.Workload, ParamsJSON: string(paramsJSON), CreatedAt: time.Now().UTC()}
+	sweep := &sweepstate.Sweep{
+		ID: sweepID, Provider: m.Provider, Product: m.Product, Plan: m.Plan, Workload: m.Workload,
+		ParamsJSON: string(paramsJSON), CreatedAt: time.Now().UTC(),
+	}
 	if err := store.CreateSweep(sweep); err != nil {
 		return err
 	}

@@ -25,7 +25,7 @@ func TestBudgetExhausted_StopsWhileAnotherRunIsInFlight_ThenResumeContinuePicksI
 	failing := testPointSpec{Tier: "small", BoundType: "compute"}
 	fast := testPointSpec{Tier: "medium", BoundType: "io"}
 	points := []testPointSpec{slow, failing, fast}
-	manifestPath := writeManifest(t, "budget-exhausted", "tpcc", points)
+	manifestPath := writeManifest(t, "budget-exhausted", points)
 
 	env := newEnv(t, fakeConfig{
 		// Bootstrap/teardown kept short so the persistently-failing test
@@ -57,7 +57,7 @@ func TestBudgetExhausted_StopsWhileAnotherRunIsInFlight_ThenResumeContinuePicksI
 		t.Fatalf("dbarenactl run: exit code 0, want nonzero (budget should exhaust)\nstdout:\n%s", res.Stdout)
 	}
 
-	sweepID := sweepIDFor(t, manifestPath, "budget-exhausted", "tpcc", maxConcurrency, iterations, maxWorkloadFailures)
+	sweepID := sweepIDFor(t, manifestPath, "budget-exhausted", maxConcurrency, iterations, maxWorkloadFailures)
 	store := openStore(t, env.dbHome)
 
 	sweep, err := store.GetSweep(sweepID)

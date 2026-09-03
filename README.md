@@ -33,14 +33,20 @@ one machine.
 
 ## Candidate manifests
 
-A candidate manifest is a YAML file describing one sweep: the provider and workload under
-test, the `benchctl` scenario to run, and the list of test points (tier, bound type, and
-scenario parameters) to sweep through. See [candidates/](candidates/) for examples, e.g.
-[candidates/smoke-test.yaml](candidates/smoke-test.yaml):
+A candidate manifest is a YAML file describing one sweep: the provider/product/plan and
+workload under test, the `benchctl` scenario to run, and the list of test points (tier, bound
+type, and scenario parameters) to sweep through. `provider` is one of `AWS`, `GCP`, `Supabase`;
+`product` is the one managed database product valid for that provider (`RDS`, `Cloud SQL for
+Postgres`, `Supabase`); `plan` selects an edition/tier where the product has one (GCP:
+`Enterprise` or `Enterprise Plus`; Supabase: always `Pro`; AWS has none today). See
+[candidates/](candidates/) for examples, e.g. [candidates/smoke-test.yaml](candidates/smoke-test.yaml):
 
 ```yaml
-provider: supabase
+provider: Supabase
+product: Supabase
+plan: Pro
 workload: tpcc
+region: us-east-1
 scenario_path: ../../benchctl/scenarios/oriole-vs-postgres-tpcc-ec2.yaml
 test_points:
   - tier: small
@@ -78,6 +84,70 @@ existing results and extend the budget, or discard progress and start fresh. See
 [docs/troubleshooting.md](docs/troubleshooting.md) for how sweeps fail and how to check for
 infrastructure left running.
 
+## Pricing
+
+`dbarenactl pricing` fetches or manually records provider on-demand list pricing (never
+discounted) and caches it locally only, alongside the rest of dbarenactl's state -- nothing
+is ever uploaded anywhere. Every `fetch`/`set` call appends a new immutable snapshot rather
+than overwriting the previous one, so pricing history is preserved; each snapshot records
+both when dbarenactl captured it and, if the provider's source exposes one, when the
+provider itself last changed the price. Region is never typed by hand: `fetch`/`set` take
+`--candidate <manifest>` and derive both the provider and the region from that manifest's
+`provider:`/`region:` fields, so a snapshot always reflects the same region a candidate was
+actually run against.
+
+```bash
+# Fetch aws/rds pricing for the region candidates/aws-rds-tpcc.yaml declares
+./dbarenactl pricing fetch --candidate candidates/aws-rds-tpcc.yaml
+
+# supabase has no public pricing API, but does publish an agent-facing pricing
+# doc (supabase.com/pricing.md) that's fetched and parsed the same way
+./dbarenactl pricing fetch --candidate candidates/supabase-tpcc.yaml
+
+# for a provider with neither, record a snapshot by hand instead
+./dbarenactl pricing set --candidate candidates/supabase-tpcc.yaml --file supabase-prices.json
+
+# See what's cached, and inspect one snapshot's line items
+./dbarenactl pricing list
+./dbarenactl pricing show aws/rds
+```
+
+## Results
+
+`dbarenactl results <sweep-id>` assembles one `result.json` per test point, ready to submit
+as a PR to `dbarena/dbarena`. For each test point it picks the one successful iteration
+whose peak-concurrency throughput is the median among that test point's iterations, and
+reports every field from that run alone -- iterations are never pooled or averaged
+together. Instance sizing is read from the candidate manifest's `set:` block
+(`disk_size_gb`, `disk_iops`, `disk_throughput_mibps`) and its `pricing:` block
+(`db_instance_type`, `disk_type`, and, for AWS tiers that cross a storage-baseline
+threshold, `disk_baseline_iops`/`disk_baseline_throughput_mibps`) -- `pricing:` is
+dbarenactl-internal metadata, never forwarded to benchctl as a `--set` flag, for facts a
+benchctl scenario doesn't itself accept as an input but this command's cost calculators
+still need. Both are re-read from the manifest fresh on every `results` invocation, so
+re-running `results` after a manifest correction always reflects the corrected values,
+even for a sweep that ran before the correction. If a
+pricing snapshot is cached for the sweep's provider/product/plan/region, its monthly cost
+is computed and included (with a full per-component breakdown logged to
+`~/.dbarenactl/sweeps/<sweep-id>/logs/pricing-audit.log` for review before publishing);
+otherwise the result is still written, with `pricing: null` and a warning.
+
+```bash
+# Fetch pricing first (optional, but needed for cost data in the output)
+./dbarenactl pricing fetch --candidate candidates/aws-rds-tpcc.yaml
+
+# Write results/<provider>/<workload>/<scenario>/result.json for every test point
+# that reached its required number of successful iterations
+./dbarenactl results aws-rds-tpcc-2ed91ebe843e
+
+# From a dbarena checkout (or a directory with one as a sibling), results/index.json
+# is updated automatically. Otherwise, --dest picks the destination explicitly.
+./dbarenactl results aws-rds-tpcc-2ed91ebe843e --dest ../dbarena
+
+# Emit a result even for a test point short of its required iterations
+./dbarenactl results aws-rds-tpcc-2ed91ebe843e --force
+```
+
 ## Command reference
 
 | Command | Description |
@@ -87,8 +157,11 @@ infrastructure left running.
 | `dbarenactl resume [sweep-id]` | Continue an incomplete sweep, or list incomplete sweeps if no id is given |
 | `dbarenactl status [sweep-id]` | Show sweep progress, or list incomplete sweeps if no id is given |
 | `dbarenactl delete <sweep-id>` | Permanently delete a sweep's state and tear down associated infrastructure |
-| `dbarenactl results <sweep-id>` | Assemble a results file from a sweep's artifacts (not yet implemented) |
-| `dbarenactl pricing fetch\|set <provider>` | Record a provider pricing snapshot (not yet implemented) |
+| `dbarenactl results <sweep-id> [--dest <dir>] [--candidate <manifest>] [--force]` | Assemble `result.json` files from a sweep's fetched artifacts, ready for a `dbarena/dbarena` PR |
+| `dbarenactl pricing fetch --candidate <manifest>` | Fetch and record a pricing snapshot from a provider's own primary source (aws/rds, gcp/cloudsql, gcp/cloudsql-enterprise-plus, supabase); provider and region are derived from the manifest |
+| `dbarenactl pricing set --candidate <manifest> --file <items.json>` | Manually record a pricing snapshot for a provider with no automated source |
+| `dbarenactl pricing list [--provider <p>] [--all]` | List cached pricing snapshots (latest per provider/region by default, `--all` for full history) |
+| `dbarenactl pricing show <provider> [--region <r>]` | Show a snapshot's line items in full |
 
 Common `run` flags: `--max-concurrency` (default 1), `--iterations` (successful runs
 required per test point, default 3), `--on-workload-failure retry|fail-teardown`, `--set

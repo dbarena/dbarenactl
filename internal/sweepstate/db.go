@@ -13,6 +13,8 @@ const schema = `
 CREATE TABLE IF NOT EXISTS sweeps (
 	id           TEXT PRIMARY KEY,
 	provider     TEXT NOT NULL,
+	product      TEXT NOT NULL DEFAULT '',
+	plan         TEXT NOT NULL DEFAULT '',
 	workload     TEXT NOT NULL,
 	params_json  TEXT NOT NULL,
 	status       TEXT NOT NULL,

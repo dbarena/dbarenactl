@@ -1,0 +1,57 @@
+{
+  "skus": [
+    {
+      "skuId": "sku-vcpu",
+      "description": "Cloud SQL for PostgreSQL: vCPU time in Americas",
+      "serviceRegions": ["us-east1"],
+      "category": {"resourceFamily": "ApplicationServices", "resourceGroup": "SQLGen2", "usageType": "OnDemand"},
+      "pricingInfo": [{
+        "effectiveTime": "2026-01-01T00:00:00Z",
+        "pricingExpression": {
+          "usageUnitDescription": "hour",
+          "tieredRates": [{"unitPrice": {"units": "0", "nanos": 53700000}}]
+        }
+      }]
+    },
+    {
+      "skuId": "sku-regional-storage",
+      "description": "Cloud SQL for PostgreSQL: Regional storage PD SSD in Americas",
+      "serviceRegions": ["us-east1"],
+      "category": {"resourceFamily": "ApplicationServices", "resourceGroup": "SQLGen2", "usageType": "OnDemand"},
+      "pricingInfo": [{
+        "effectiveTime": "2026-01-01T00:00:00Z",
+        "pricingExpression": {
+          "usageUnitDescription": "gibibyte month",
+          "tieredRates": [{"unitPrice": {"units": "0", "nanos": 200000000}}]
+        }
+      }]
+    },
+    {
+      "skuId": "sku-wrong-region",
+      "description": "Cloud SQL for PostgreSQL: vCPU time in Europe",
+      "serviceRegions": ["europe-west1"],
+      "category": {"resourceFamily": "ApplicationServices", "resourceGroup": "SQLGen2", "usageType": "OnDemand"},
+      "pricingInfo": [{
+        "effectiveTime": "2026-01-01T00:00:00Z",
+        "pricingExpression": {
+          "usageUnitDescription": "hour",
+          "tieredRates": [{"unitPrice": {"units": "0", "nanos": 53700000}}]
+        }
+      }]
+    },
+    {
+      "skuId": "sku-mysql",
+      "description": "Cloud SQL for MySQL: vCPU time in Americas",
+      "serviceRegions": ["us-east1"],
+      "category": {"resourceFamily": "ApplicationServices", "resourceGroup": "SQLGen2", "usageType": "OnDemand"},
+      "pricingInfo": [{
+        "effectiveTime": "2026-01-01T00:00:00Z",
+        "pricingExpression": {
+          "usageUnitDescription": "hour",
+          "tieredRates": [{"unitPrice": {"units": "0", "nanos": 53700000}}]
+        }
+      }]
+    }
+  ],
+  "nextPageToken": "skup2"
+}

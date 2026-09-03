@@ -10,7 +10,8 @@ import (
 )
 
 const testManifestYAML = `
-provider: aws/rds
+provider: AWS
+product: RDS
 workload: tpcc
 scenario_path: rds-tpcc-ec2-tiers.yaml
 test_points:

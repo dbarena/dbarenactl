@@ -42,6 +42,8 @@ func pollInterval() time.Duration {
 // internal/sweepid: they're part of the sweep's identity).
 type sweepParams struct {
 	Provider            string `json:"provider"`
+	Product             string `json:"product"`
+	Plan                string `json:"plan"`
 	Workload            string `json:"workload"`
 	ManifestPath        string `json:"manifest_path"`
 	MaxConcurrency      int    `json:"max_concurrency"`
@@ -120,7 +122,8 @@ func executeSweep(ctx context.Context, store *sweepstate.Store, sweepID, benchct
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	fmt.Fprintf(os.Stderr, "==> Sweep %s: running (provider=%s, workload=%s, max-concurrency=%d)\n", sweepID, params.Provider, params.Workload, params.MaxConcurrency)
+	fmt.Fprintf(os.Stderr, "==> Sweep %s: running (provider=%s, product=%s, plan=%s, workload=%s, max-concurrency=%d)\n",
+		sweepID, params.Provider, params.Product, params.Plan, params.Workload, params.MaxConcurrency)
 	runErr := sched.RunSweep(ctx, sweepID, opts)
 	if runErr != nil {
 		if errors.Is(runErr, context.Canceled) {

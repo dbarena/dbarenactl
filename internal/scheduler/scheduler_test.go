@@ -33,7 +33,7 @@ func newTestScheduler(t *testing.T) (*Scheduler, *fakeBench, *sweepstate.Store) 
 
 func seedSweepWithOneTestPoint(t *testing.T, st *sweepstate.Store, successesNeeded, failureBudget int) (*sweepstate.Sweep, *sweepstate.TestPoint) {
 	t.Helper()
-	sw := &sweepstate.Sweep{ID: "sweep-1", Provider: "aws/rds", ParamsJSON: "{}", CreatedAt: time.Now().UTC()}
+	sw := &sweepstate.Sweep{ID: "sweep-1", Provider: "AWS", ParamsJSON: "{}", CreatedAt: time.Now().UTC()}
 	if err := st.CreateSweep(sw); err != nil {
 		t.Fatal(err)
 	}
@@ -565,7 +565,7 @@ func TestStep_FailureBudgetExhausted_StopsTheWorldAndStaysExhausted(t *testing.T
 // rows, or it would silently orphan whatever infra it represents.
 func TestRestartExhaustedSweep_TearsDownStragglerBeforeWiping(t *testing.T) {
 	s, fb, st := newTestScheduler(t)
-	sw := &sweepstate.Sweep{ID: "sweep-1", Provider: "aws/rds", ParamsJSON: "{}", CreatedAt: time.Now().UTC()}
+	sw := &sweepstate.Sweep{ID: "sweep-1", Provider: "AWS", ParamsJSON: "{}", CreatedAt: time.Now().UTC()}
 	if err := st.CreateSweep(sw); err != nil {
 		t.Fatal(err)
 	}
@@ -868,7 +868,7 @@ func TestStep_NeedsResultsPullTerminated_FinalizesAsFailure(t *testing.T) {
 
 func TestStep_RespectsMaxConcurrency(t *testing.T) {
 	s, fb, st := newTestScheduler(t)
-	sw := &sweepstate.Sweep{ID: "sweep-1", Provider: "aws/rds", ParamsJSON: "{}", CreatedAt: time.Now().UTC()}
+	sw := &sweepstate.Sweep{ID: "sweep-1", Provider: "AWS", ParamsJSON: "{}", CreatedAt: time.Now().UTC()}
 	if err := st.CreateSweep(sw); err != nil {
 		t.Fatal(err)
 	}
@@ -918,7 +918,7 @@ func TestStep_RespectsMaxConcurrency(t *testing.T) {
 // successes never starves its neighbors of their first attempt.
 func TestStep_StacksConcurrentAttemptsBreadthFirst(t *testing.T) {
 	s, fb, st := newTestScheduler(t)
-	sw := &sweepstate.Sweep{ID: "sweep-1", Provider: "aws/rds", ParamsJSON: "{}", CreatedAt: time.Now().UTC()}
+	sw := &sweepstate.Sweep{ID: "sweep-1", Provider: "AWS", ParamsJSON: "{}", CreatedAt: time.Now().UTC()}
 	if err := st.CreateSweep(sw); err != nil {
 		t.Fatal(err)
 	}

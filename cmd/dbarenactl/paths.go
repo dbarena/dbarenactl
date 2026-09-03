@@ -53,3 +53,13 @@ func logsBaseDir(sweepID string) (string, error) {
 	}
 	return filepath.Join(home, "sweeps", sweepID, "logs"), nil
 }
+
+// logFilePath is dbarenactl's own diagnostic log (INFO+), separate from the
+// per-run benchctl output logs under logsBaseDir.
+func logFilePath() (string, error) {
+	home, err := dbarenactlHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "dbarenactl.log"), nil
+}

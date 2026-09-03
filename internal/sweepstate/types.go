@@ -23,6 +23,8 @@ const (
 type Sweep struct {
 	ID         string
 	Provider   string
+	Product    string
+	Plan       string
 	Workload   string
 	ParamsJSON string
 	Status     SweepStatus

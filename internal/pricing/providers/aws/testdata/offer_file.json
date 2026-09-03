@@ -1,0 +1,186 @@
+{
+  "publicationDate": "2026-03-15T12:00:00Z",
+  "products": {
+    "SKU_INSTANCE": {
+      "productFamily": "Database Instance",
+      "attributes": {
+        "databaseEngine": "PostgreSQL",
+        "deploymentOption": "Single-AZ",
+        "licenseModel": "No license required",
+        "instanceType": "db.t4g.small"
+      }
+    },
+    "SKU_STORAGE": {
+      "productFamily": "Database Storage",
+      "attributes": {
+        "databaseEngine": "PostgreSQL",
+        "deploymentOption": "Single-AZ",
+        "volumeType": "General Purpose-GP3",
+        "usagetype": "RDS:GP3-Storage"
+      }
+    },
+    "SKU_STORAGE_GP2": {
+      "productFamily": "Database Storage",
+      "attributes": {
+        "databaseEngine": "PostgreSQL",
+        "deploymentOption": "Single-AZ",
+        "volumeType": "General Purpose",
+        "usagetype": "RDS:GP2-Storage"
+      }
+    },
+    "SKU_IOPS": {
+      "productFamily": "Provisioned IOPS",
+      "attributes": {
+        "databaseEngine": "PostgreSQL",
+        "deploymentOption": "Single-AZ",
+        "usagetype": "RDS:GP3-PIOPS"
+      }
+    },
+    "SKU_IOPS_IO1": {
+      "productFamily": "Provisioned IOPS",
+      "attributes": {
+        "databaseEngine": "PostgreSQL",
+        "deploymentOption": "Single-AZ",
+        "usagetype": "RDS:PIOPS"
+      }
+    },
+    "SKU_THROUGHPUT": {
+      "productFamily": "Provisioned Throughput",
+      "attributes": {
+        "databaseEngine": "PostgreSQL",
+        "deploymentOption": "Single-AZ",
+        "usagetype": "RDS:GP3-Throughput"
+      }
+    },
+    "SKU_MYSQL": {
+      "productFamily": "Database Instance",
+      "attributes": {
+        "databaseEngine": "MySQL",
+        "deploymentOption": "Single-AZ",
+        "licenseModel": "No license required",
+        "instanceType": "db.t4g.small"
+      }
+    },
+    "SKU_MULTIAZ": {
+      "productFamily": "Database Instance",
+      "attributes": {
+        "databaseEngine": "PostgreSQL",
+        "deploymentOption": "Multi-AZ",
+        "licenseModel": "No license required",
+        "instanceType": "db.t4g.small"
+      }
+    },
+    "SKU_LICENSED": {
+      "productFamily": "Database Instance",
+      "attributes": {
+        "databaseEngine": "PostgreSQL",
+        "deploymentOption": "Single-AZ",
+        "licenseModel": "License included",
+        "instanceType": "db.t4g.small"
+      }
+    }
+  },
+  "terms": {
+    "OnDemand": {
+      "SKU_INSTANCE": {
+        "SKU_INSTANCE.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU_INSTANCE.JRTCKXETXF.6YS6EN2CT7": {
+              "description": "USD 0.034 per RDS db.t4g.small instance hour (or partial hour) running PostgreSQL",
+              "unit": "Hrs",
+              "pricePerUnit": {"USD": "0.0340000000"}
+            }
+          }
+        }
+      },
+      "SKU_STORAGE": {
+        "SKU_STORAGE.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU_STORAGE.JRTCKXETXF.6YS6EN2CT7": {
+              "description": "$0.115 per GB-Mo of gp3 provisioned storage",
+              "unit": "GB-Mo",
+              "pricePerUnit": {"USD": "0.1150000000"}
+            }
+          }
+        }
+      },
+      "SKU_STORAGE_GP2": {
+        "SKU_STORAGE_GP2.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU_STORAGE_GP2.JRTCKXETXF.6YS6EN2CT7": {
+              "description": "$0.10 per GB-Mo of gp2 provisioned storage",
+              "unit": "GB-Mo",
+              "pricePerUnit": {"USD": "0.1000000000"}
+            }
+          }
+        }
+      },
+      "SKU_IOPS": {
+        "SKU_IOPS.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU_IOPS.JRTCKXETXF.6YS6EN2CT7": {
+              "description": "$0.02 per IOPS-Month of gp3 provisioned IOPS",
+              "unit": "IOPS-Mo",
+              "pricePerUnit": {"USD": "0.0200000000"}
+            }
+          }
+        }
+      },
+      "SKU_IOPS_IO1": {
+        "SKU_IOPS_IO1.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU_IOPS_IO1.JRTCKXETXF.6YS6EN2CT7": {
+              "description": "$0.10 per IOPS-Month of io1 provisioned IOPS",
+              "unit": "IOPS-Mo",
+              "pricePerUnit": {"USD": "0.1000000000"}
+            }
+          }
+        }
+      },
+      "SKU_THROUGHPUT": {
+        "SKU_THROUGHPUT.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU_THROUGHPUT.JRTCKXETXF.6YS6EN2CT7": {
+              "description": "$0.08 per MiBps-Month of gp3 provisioned throughput",
+              "unit": "MiBps-Mo",
+              "pricePerUnit": {"USD": "0.0800000000"}
+            }
+          }
+        }
+      },
+      "SKU_MYSQL": {
+        "SKU_MYSQL.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU_MYSQL.JRTCKXETXF.6YS6EN2CT7": {
+              "description": "USD 0.034 per RDS db.t4g.small instance hour (or partial hour) running MySQL",
+              "unit": "Hrs",
+              "pricePerUnit": {"USD": "0.0340000000"}
+            }
+          }
+        }
+      },
+      "SKU_MULTIAZ": {
+        "SKU_MULTIAZ.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU_MULTIAZ.JRTCKXETXF.6YS6EN2CT7": {
+              "description": "USD 0.068 per RDS db.t4g.small Multi-AZ instance hour running PostgreSQL",
+              "unit": "Hrs",
+              "pricePerUnit": {"USD": "0.0680000000"}
+            }
+          }
+        }
+      },
+      "SKU_LICENSED": {
+        "SKU_LICENSED.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU_LICENSED.JRTCKXETXF.6YS6EN2CT7": {
+              "description": "USD 0.050 per RDS db.t4g.small instance hour running PostgreSQL (License included)",
+              "unit": "Hrs",
+              "pricePerUnit": {"USD": "0.0500000000"}
+            }
+          }
+        }
+      }
+    }
+  }
+}

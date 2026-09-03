@@ -52,6 +52,8 @@ func runStatusCmd(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Sweep:    %s\n", sweep.ID)
 	fmt.Printf("Provider: %s\n", sweep.Provider)
+	fmt.Printf("Product:  %s\n", sweep.Product)
+	fmt.Printf("Plan:     %s\n", dashIfEmpty(sweep.Plan))
 	fmt.Printf("Workload: %s\n", sweep.Workload)
 	fmt.Printf("Status:   %s\n", sweep.Status)
 	if sweep.HasError() {

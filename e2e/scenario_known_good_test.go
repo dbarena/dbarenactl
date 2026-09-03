@@ -17,7 +17,7 @@ func TestKnownGood_MultipleTestPointsAllSucceed(t *testing.T) {
 		{Tier: "medium", BoundType: "io"},
 		{Tier: "medium", BoundType: "compute"},
 	}
-	manifestPath := writeManifest(t, "known-good", "tpcc", points)
+	manifestPath := writeManifest(t, "known-good", points)
 
 	env := newEnv(t, fakeConfig{
 		Default: behavior{Outcome: "success", WorkloadDuration: "50ms"},
@@ -36,7 +36,7 @@ func TestKnownGood_MultipleTestPointsAllSucceed(t *testing.T) {
 		t.Fatalf("dbarenactl run: exit code %d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
-	sweepID := sweepIDFor(t, manifestPath, "known-good", "tpcc", maxConcurrency, iterations, 0)
+	sweepID := sweepIDFor(t, manifestPath, "known-good", maxConcurrency, iterations, 0)
 	store := openStore(t, env.dbHome)
 
 	sweep, err := store.GetSweep(sweepID)

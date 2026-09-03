@@ -14,8 +14,8 @@ var ErrNotFound = errors.New("sweepstate: not found")
 // CreateSweep inserts a new sweep row with status running.
 func (s *Store) CreateSweep(sw *Sweep) error {
 	_, err := s.db.Exec(
-		`INSERT INTO sweeps (id, provider, workload, params_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		sw.ID, sw.Provider, sw.Workload, sw.ParamsJSON, string(SweepRunning), sw.CreatedAt.UTC(),
+		`INSERT INTO sweeps (id, provider, product, plan, workload, params_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		sw.ID, sw.Provider, sw.Product, sw.Plan, sw.Workload, sw.ParamsJSON, string(SweepRunning), sw.CreatedAt.UTC(),
 	)
 	if err != nil {
 		return fmt.Errorf("sweepstate: create sweep %s: %w", sw.ID, err)
@@ -27,7 +27,7 @@ func (s *Store) CreateSweep(sw *Sweep) error {
 // GetSweep loads a sweep by id.
 func (s *Store) GetSweep(id string) (*Sweep, error) {
 	row := s.db.QueryRow(
-		`SELECT id, provider, workload, params_json, status, error_action, error_target, error_detail, error_at, created_at
+		`SELECT id, provider, product, plan, workload, params_json, status, error_action, error_target, error_detail, error_at, created_at
 		 FROM sweeps WHERE id = ?`, id,
 	)
 	return scanSweep(row)
@@ -37,7 +37,7 @@ func (s *Store) GetSweep(id string) (*Sweep, error) {
 // recently created first.
 func (s *Store) ListIncompleteSweeps() ([]*Sweep, error) {
 	rows, err := s.db.Query(
-		`SELECT id, provider, workload, params_json, status, error_action, error_target, error_detail, error_at, created_at
+		`SELECT id, provider, product, plan, workload, params_json, status, error_action, error_target, error_detail, error_at, created_at
 		 FROM sweeps WHERE status != ? ORDER BY created_at DESC`, string(SweepCompleted),
 	)
 	if err != nil {
@@ -74,7 +74,7 @@ func scanSweepGeneric(r rowScanner) (*Sweep, error) {
 	var sw Sweep
 	var status string
 	var errorAt sql.NullTime
-	if err := r.Scan(&sw.ID, &sw.Provider, &sw.Workload, &sw.ParamsJSON, &status,
+	if err := r.Scan(&sw.ID, &sw.Provider, &sw.Product, &sw.Plan, &sw.Workload, &sw.ParamsJSON, &status,
 		&sw.ErrorAction, &sw.ErrorTarget, &sw.ErrorDetail, &errorAt, &sw.CreatedAt); err != nil {
 		return nil, fmt.Errorf("sweepstate: scan sweep: %w", err)
 	}
@@ -410,6 +410,33 @@ func (s *Store) ListNonTerminalRuns(sweepID string) ([]*Run, error) {
 	)
 	if err != nil {
 		return nil, fmt.Errorf("sweepstate: list non-terminal runs for %s: %w", sweepID, err)
+	}
+	defer rows.Close()
+
+	var out []*Run
+	for rows.Next() {
+		run, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, run)
+	}
+	return out, rows.Err()
+}
+
+// ListRunsForTestPoint returns every run (including non-terminal, orphaned,
+// and failed ones) for a single test point, ordered by iteration attempt.
+// Unlike ListNonTerminalRuns, this includes terminal runs -- callers wanting
+// only successful, artifact-bearing runs (e.g. `dbarenactl results`) filter
+// on Outcome/LocalArtifactDir themselves.
+func (s *Store) ListRunsForTestPoint(testPointID string) ([]*Run, error) {
+	rows, err := s.db.Query(
+		`SELECT run_id, test_point_id, iteration_attempt, status, outcome, local_artifact_dir, fetch_attempts, created_at, updated_at
+		 FROM runs WHERE test_point_id = ? ORDER BY iteration_attempt`,
+		testPointID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("sweepstate: list runs for test point %s: %w", testPointID, err)
 	}
 	defer rows.Close()
 

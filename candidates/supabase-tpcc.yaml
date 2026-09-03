@@ -11,8 +11,11 @@
 #
 # instance_type is the load driver's own EC2 instance type (independent of
 # project_size).
-provider: supabase
+provider: Supabase
+product: Supabase
+plan: Pro
 workload: tpcc
+region: us-east-1
 scenario_path: ../../benchctl/scenarios/supabase-tpcc-tiers.yaml
 test_points:
   # small: documented IOPS baseline (1,000) is below gp3's 3,000 floor, so
@@ -28,14 +31,18 @@ test_points:
       disk_type: "gp3"
       threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
+  # 2026-09-02: disk_throughput_mibps=125 added explicitly on every compute-bound row below
+  # (small/medium/large/xlarge) -- previously left unset, relying on the platform silently
+  # picking its own gp3 free-tier floor default. Explicit everywhere now, no implicit defaults.
   - tier: small
     bound_type: compute
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
       project_size: small
-      warehouses: "14"
+      warehouses: "8"
       disk_size_gb: "20"
       disk_iops: "3000"
+      disk_throughput_mibps: "125"
       threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
   # medium: documented baseline (2,000) is also below the gp3 floor -- same
@@ -48,66 +55,80 @@ test_points:
       warehouses: "160"
       disk_size_gb: "32"
       disk_iops: "3000"
+      disk_throughput_mibps: "125"
       disk_type: "gp3"
       threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
+  # 2026-09-02 correction: disk_size_gb was "32" (io-bound's value) -- compute-bound's dataset at
+  # 16 warehouses is tiny, so this drops to the 20 GB floor per
+  # docs/compute-bound-sizing-formula-2026-09.md's disk_size_gb = 2xRAM_GiB rule (2x4=8, floored
+  # to 20). Not independently tested at this tier -- accepted by inference from xlarge (see that
+  # doc's §2.2), which passed cleanly at the same disk config with a heavier load.
   - tier: medium
     bound_type: compute
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
       project_size: medium
-      warehouses: "28"
-      disk_size_gb: "32"
+      warehouses: "16"
+      disk_size_gb: "20"
       disk_iops: "3000"
+      disk_throughput_mibps: "125"
       threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
-  # large: the only tier with two published IO-bound variants.
-  # own-default requests Supabase's documented Large baseline 
-  # (3,600 IOPS / 79 MB/s), but 79 MB/s is below gp3's actual minimum 
-  # throughput (125), so disk_throughput_mibps is corrected up to that 
-  # floor and IOPS is left at the documented value.
-  # 
-  # matched-to-rds instead gives Supabase the exact same disk performance RDS
-  # gets at this tier (3,000 IOPS / 125 MB/s, RDS's own gp3 floor), isolating
-  # the IOPS difference from the platform/hardware comparison.
+  # large: normalized to 3,000 IOPS / 125 MB/s across all three platforms
+  # (Supabase/RDS/GCP) -- see docs/disk-sizing-formula-2026-09.md in benchctl.
+  # RDS only ever achieves 3,000 here regardless of what's requested (AWS
+  # rejects a higher iops value below the 400 GiB threshold), so this is
+  # parity with RDS's real ceiling rather than Supabase's own higher
+  # documented baseline (3,600 IOPS / 79 MB/s, superseded -- previously the
+  # "own-default" variant here, now dropped in favor of a single aligned
+  # value across providers).
   - tier: large
     bound_type: io
-    variant: own-default
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
       project_size: large
       warehouses: "320"
       disk_size_gb: "64"
-      disk_iops: "3600"
+      disk_iops: "3000"
       disk_throughput_mibps: "125"
       disk_type: "gp3"
       threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
-  - tier: large
-    bound_type: io
-    variant: matched-to-rds
-    set:
-      supabase_org_id: "{{ params.supabase_org_id }}"
-      project_size: large
-      warehouses: "320"
-      disk_size_gb: "64"
-      disk_iops: "3000"
-      disk_type: "gp3"
-      threads: "1,2,4,8,12"
-      instance_type: c8gd.xlarge
+  # 2026-09-02 correction: disk_size_gb was "64" (io-bound's value) -- drops to the 20 GB floor
+  # per docs/compute-bound-sizing-formula-2026-09.md (2x8=16, floored to 20). Accepted by
+  # inference from xlarge, same as medium above.
   - tier: large
     bound_type: compute
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
       project_size: large
-      warehouses: "56"
-      disk_size_gb: "64"
+      warehouses: "32"
+      disk_size_gb: "20"
       disk_iops: "3000"
+      disk_throughput_mibps: "125"
       threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
-  # xlarge: IO-bound matches RDS's 12,000 IOPS floor at 400 GiB (the closest
-  # achievable value to Supabase's own documented 6,000 baseline, since RDS's
-  # gp3 step function provides no valid IOPS between 3,000 and 12,000).
+  # xlarge: 12,000 IOPS, matching RDS's floor at 400 GiB and now GCP's config
+  # too (all three platforms aligned here -- see
+  # docs/disk-sizing-formula-2026-09.md). Supabase's own documented XL
+  # baseline is only 6,000, but live measurement (2026-09-01, both OrioleDB
+  # and vanilla Postgres) showed real IOPS demand at this tier already
+  # exceeds 6,000 by 1.6-2x, so 12,000 was kept rather than dropped to the
+  # documented baseline. Confirmed via ../platform's disk-validation code
+  # (packages/api-core/src/shared/volumes.ts) that the docs page's per-tier
+  # IOPS numbers are not actually platform-enforced -- only disk-size-based
+  # limits are (gp3 max = min(size_gb*500, 80000)), so this is a deliberate
+  # fairness choice, not a workaround for a hard limit.
+  #
+  # disk_throughput_mibps=149 corrects an earlier unset value (which
+  # defaulted to gp3's free 125 MiB/s): live measurement at 125 showed
+  # vanilla Postgres pegged at exactly that cap in 100% of benchmark
+  # samples, and OrioleDB breached it in 22% of samples (peak 141.7 MiB/s).
+  # 149 (Supabase's own documented XL baseline) gives ~5% headroom over the
+  # measured OrioleDB peak; not yet re-confirmed to fully relieve vanilla
+  # Postgres's continuous saturation -- see the rerun file.
+  #
   # Compute-bound uses a much smaller disk (20 GB vs IO-bound's 128) since the
   # smaller in-cache dataset doesn't need it.
   - tier: xlarge
@@ -118,24 +139,40 @@ test_points:
       warehouses: "640"
       disk_size_gb: "128"
       disk_iops: "12000"
+      disk_throughput_mibps: "149"
       disk_type: "gp3"
       threads: "1,2,4,8,16,24"
       instance_type: c8gd.xlarge
+  # disk_size_gb=20 (not the docs/compute-bound-sizing-formula-2026-09.md formula's 32 GB
+  # 2xRAM_GiB value) is intentional -- live-tested and passed comfortably at 64
+  # warehouses/24 threads on both OrioleDB and vanilla Postgres (2026-09-01), so kept at the
+  # already-validated value rather than bumped to the untested formula number.
   - tier: xlarge
     bound_type: compute
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
       project_size: xlarge
-      warehouses: "112"
+      warehouses: "64"
       disk_size_gb: "20"
       disk_iops: "3000"
+      disk_throughput_mibps: "125"
       threads: "1,2,4,8,16,24"
       instance_type: c8gd.xlarge
   # 2xlarge: own tier disk size (256 GB, well below RDS's 400 GiB
   # custom-IOPS threshold, but Supabase's IOPS isn't gated by disk size the
   # way RDS's is) with disk_iops matched to the documented 2XL baseline.
-  # Compute-bound uses a right-sized disk (40 GB) for its ~22.4 GB 
-  # dataset, continuing xlarge's headroom ratio rather than reusing the 
+  # This is a confirmed hard ceiling, not just a documented one: a prior
+  # session measured both a 149 and a 500 MiB/s throughput variant pegging
+  # at ~11,950-11,971 r/s / 100% util regardless of throughput -- accepted
+  # as a permanent constraint at this tier (2026-09-01 discussion).
+  #
+  # disk_throughput_mibps=297 matches Supabase's own documented 2XL baseline
+  # and GCP's config; not itself directly measured yet (the same prior
+  # session tested 149 and 500 MiB/s, bracketing but not hitting 297) --
+  # see the rerun file.
+  #
+  # Compute-bound uses a right-sized disk (40 GB) for its ~22.4 GB
+  # dataset, continuing xlarge's headroom ratio rather than reusing the
   # full IO-bound disk size.
   - tier: 2xlarge
     bound_type: io
@@ -145,24 +182,39 @@ test_points:
       warehouses: "1280"
       disk_size_gb: "256"
       disk_iops: "12000"
+      disk_throughput_mibps: "297"
       disk_type: "gp3"
       threads: "1,2,4,8,16,32,48"
       instance_type: c8gd.2xlarge
+  # 2026-09-02 correction: disk_size_gb was "40", disk_iops "3000" -- both replaced following
+  # docs/compute-bound-sizing-formula-2026-09.md's live-tested Config (§2.3): flat 3,000 IOPS
+  # broke down at larger tiers (checkpoint-storm-amplified write IO -- see that doc's §2.4 for
+  # the root-cause investigation), so 2xlarge and up now get a dedicated, live-validated disk
+  # spec instead of reusing small/medium/large's floor config. disk_size_gb=64 is 2xRAM_GiB;
+  # 6,000 IOPS / 250 MiB/s is the exact config that passed cleanly (CPU-bound, iowait 1.4-2.1%)
+  # in that round's 2xlarge run.
   - tier: 2xlarge
     bound_type: compute
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
       project_size: 2xlarge
-      warehouses: "224"
-      disk_size_gb: "40"
-      disk_iops: "3000"
+      warehouses: "128"
+      disk_size_gb: "64"
+      disk_iops: "6000"
+      disk_throughput_mibps: "250"
       threads: "1,2,4,8,16,32,48"
       instance_type: c8gd.2xlarge
   # 4xlarge: own tier disk size (512 GB) with disk_iops matched to the
   # documented 4XL baseline. Compute-bound uses a right-sized disk (80 GB)
   # for its ~44.8 GB dataset.
-  # disk_type: use io2 as this tier's documented IOPS (20000) exceeds Supabase's
-  # gp3 cap of min(500 IOPS/GB, 16000); io2 supports up to 1000 IOPS/GB.
+  # disk_type: gp3, not io2 -- the "gp3 cap of min(500 IOPS/GB, 16000)" this
+  # used to justify io2 was based on the outdated compute-and-disk docs page.
+  # ../platform's real validation logic (packages/api-core/src/shared/volumes.ts)
+  # gives gp3 max IOPS = min(size_gb*500, 80000) = 80,000 for 512 GB here, and
+  # max throughput = min(iops*0.25, 2000) = 2,000 MiB/s -- 20,000 IOPS / 594
+  # MiB/s fits easily. Live-verified 2026-08-31: the Management API accepted
+  # disk_iops=20000 directly on a 512 GB gp3 disk (GET .../config/disk
+  # confirmed it was actually applied, not silently clamped).
   - tier: 4xlarge
     bound_type: io
     set:
@@ -171,24 +223,36 @@ test_points:
       warehouses: "2560"
       disk_size_gb: "512"
       disk_iops: "20000"
-      disk_type: "io2"
+      disk_throughput_mibps: "594"
+      disk_type: "gp3"
       threads: "1,2,4,8,16,32,64,96"
       instance_type: c8gd.4xlarge
+  # 2026-09-02 correction: disk_size_gb was "80", disk_iops "3000" -- replaced per
+  # docs/compute-bound-sizing-formula-2026-09.md §2.5/§3. disk_size_gb=128 is 2xRAM_GiB;
+  # 12,000 IOPS / 500 MiB/s matches the ceiling AWS RDS gets forced into anyway once its own
+  # compute-bound disk is crossed to >=400 GiB to unlock non-floor IOPS at this tier (see that
+  # doc's §3 cross-provider table) -- live-tested once, best CPU/iowait profile of any large-tier
+  # config tried.
   - tier: 4xlarge
     bound_type: compute
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
       project_size: 4xlarge
-      warehouses: "448"
-      disk_size_gb: "80"
-      disk_iops: "3000"
+      warehouses: "256"
+      disk_size_gb: "128"
+      disk_iops: "12000"
+      disk_throughput_mibps: "500"
       threads: "1,2,4,8,16,32,64,96"
       instance_type: c8gd.4xlarge
   # 8xlarge: own tier disk size (1024 GB) with disk_iops matched to the
   # documented 8XL baseline. Compute-bound uses a right-sized disk (160 GB)
   # for its ~89.6 GB dataset.
-  # disk_type: use io2 as this tier's documented IOPS (40000) exceeds Supabase's
-  # gp3 cap of min(500 IOPS/GB, 16000); io2 supports up to 1000 IOPS/GB.
+  # disk_type: gp3, not io2 -- same correction as 4xlarge above. gp3 max IOPS
+  # here = min(1024*500, 80000) = 80,000 and max throughput =
+  # min(40000*0.25, 2000) = 2,000 MiB/s, so 40,000 IOPS / 1,188 MiB/s fits
+  # within gp3's real (not docs-page) ceiling. NOT yet live-verified at this
+  # tier -- neither the IOPS nor the throughput value has been tested on any
+  # engine; see the rerun file, high priority.
   - tier: 8xlarge
     bound_type: io
     set:
@@ -197,16 +261,25 @@ test_points:
       warehouses: "5120"
       disk_size_gb: "1024"
       disk_iops: "40000"
-      disk_type: "io2"
+      disk_throughput_mibps: "1188"
+      disk_type: "gp3"
       threads: "1,2,4,8,16,32,64,128,192"
       instance_type: c8gd.8xlarge
+  # 2026-09-02 correction: disk_size_gb was "160", disk_iops "3000" -- both ruled out per
+  # docs/compute-bound-sizing-formula-2026-09.md §2.4 (Configs A/B: disk-throughput-bound, not
+  # compute-bound, even after a forensic root-cause dig into a checkpoint storm caused by the
+  # platform's flat max_wal_size=4GB default -- tracked separately as PERFENG-111, not waited on).
+  # disk_size_gb=256 is 2xRAM_GiB; 12,000 IOPS / 500 MiB/s (Config C) is the best result found --
+  # checkpoint storm still present but well-absorbed (iowait ~2%, down from 8-13%), locked in as
+  # final for this tier even though disk still runs near 100% util.
   - tier: 8xlarge
     bound_type: compute
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
       project_size: 8xlarge
-      warehouses: "896"
-      disk_size_gb: "160"
-      disk_iops: "3000"
+      warehouses: "512"
+      disk_size_gb: "256"
+      disk_iops: "12000"
+      disk_throughput_mibps: "500"
       threads: "1,2,4,8,16,32,64,128,192"
       instance_type: c8gd.8xlarge

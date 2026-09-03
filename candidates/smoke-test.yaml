@@ -1,5 +1,8 @@
-provider: supabase
+provider: Supabase
+product: Supabase
+plan: Pro
 workload: tpcc
+region: us-east-1
 scenario_path: ../../benchctl/scenarios/oriole-vs-postgres-tpcc-ec2.yaml
 test_points:
   - tier: small

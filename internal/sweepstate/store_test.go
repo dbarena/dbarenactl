@@ -20,7 +20,7 @@ func openTestStore(t *testing.T) *Store {
 
 func seedSweep(t *testing.T, st *Store, id string) *Sweep {
 	t.Helper()
-	sw := &Sweep{ID: id, Provider: "aws/rds", Workload: "tpcc", ParamsJSON: "{}", CreatedAt: time.Now().UTC()}
+	sw := &Sweep{ID: id, Provider: "AWS", Product: "RDS", Workload: "tpcc", ParamsJSON: "{}", CreatedAt: time.Now().UTC()}
 	if err := st.CreateSweep(sw); err != nil {
 		t.Fatalf("CreateSweep: %v", err)
 	}
@@ -48,11 +48,26 @@ func TestSweep_CreateAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSweep: %v", err)
 	}
-	if got.Provider != "aws/rds" || got.Workload != "tpcc" || got.Status != SweepRunning {
+	if got.Provider != "AWS" || got.Product != "RDS" || got.Plan != "" || got.Workload != "tpcc" || got.Status != SweepRunning {
 		t.Errorf("got = %+v", got)
 	}
 	if got.HasError() {
 		t.Error("fresh sweep should not have an error")
+	}
+}
+
+func TestSweep_ProductAndPlanRoundTrip(t *testing.T) {
+	st := openTestStore(t)
+	sw := &Sweep{ID: "sweep-gcp", Provider: "GCP", Product: "Cloud SQL for Postgres", Plan: "Enterprise Plus", Workload: "tpcc", ParamsJSON: "{}", CreatedAt: time.Now().UTC()}
+	if err := st.CreateSweep(sw); err != nil {
+		t.Fatalf("CreateSweep: %v", err)
+	}
+	got, err := st.GetSweep("sweep-gcp")
+	if err != nil {
+		t.Fatalf("GetSweep: %v", err)
+	}
+	if got.Provider != "GCP" || got.Product != "Cloud SQL for Postgres" || got.Plan != "Enterprise Plus" {
+		t.Errorf("got = %+v", got)
 	}
 }
 
@@ -473,6 +488,60 @@ func TestListNonTerminalRuns(t *testing.T) {
 	}
 }
 
+func TestListRunsForTestPoint(t *testing.T) {
+	st := openTestStore(t)
+	seedSweep(t, st, "sweep-1")
+	tp := seedTestPoint(t, st, "sweep-1", "sweep-1-small-io", 5, 5)
+	otherTP := seedTestPoint(t, st, "sweep-1", "sweep-1-small-compute", 5, 5)
+
+	failed := &Run{RunID: "run-failed", TestPointID: tp.ID, IterationAttempt: 1}
+	active := &Run{RunID: "run-active", TestPointID: tp.ID, IterationAttempt: 2}
+	done := &Run{RunID: "run-done", TestPointID: tp.ID, IterationAttempt: 3}
+	other := &Run{RunID: "run-other-tp", TestPointID: otherTP.ID, IterationAttempt: 1}
+	for _, r := range []*Run{failed, active, done, other} {
+		if err := st.CreateRun(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.FinalizeRun("run-failed", "failure"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinalizeRun("run-done", "success"); err != nil {
+		t.Fatal(err)
+	}
+
+	runs, err := st.ListRunsForTestPoint(tp.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 3 {
+		t.Fatalf("ListRunsForTestPoint = %d runs, want 3: %+v", len(runs), runs)
+	}
+	wantIDs := []string{"run-failed", "run-active", "run-done"}
+	for i, want := range wantIDs {
+		if runs[i].RunID != want || runs[i].IterationAttempt != i+1 {
+			t.Errorf("runs[%d] = %+v, want RunID=%s IterationAttempt=%d", i, runs[i], want, i+1)
+		}
+	}
+	if runs[0].Status != RunFailed || runs[0].Outcome != "failure" {
+		t.Errorf("runs[0] (failed) = %+v", runs[0])
+	}
+	if runs[1].Status != RunLaunching {
+		t.Errorf("runs[1] (active) = %+v", runs[1])
+	}
+	if runs[2].Status != RunDone || runs[2].Outcome != "success" {
+		t.Errorf("runs[2] (done) = %+v", runs[2])
+	}
+
+	empty, err := st.ListRunsForTestPoint("no-such-test-point")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("ListRunsForTestPoint(unknown) = %v, want empty", empty)
+	}
+}
+
 func TestFinalizeRun_SuccessIncrementsSuccessesCount(t *testing.T) {
 	st := openTestStore(t)
 	seedSweep(t, st, "sweep-1")
@@ -641,7 +710,7 @@ func TestOpen_PersistsAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSweep after reopen: %v", err)
 	}
-	if sw.Provider != "aws/rds" {
+	if sw.Provider != "AWS" {
 		t.Errorf("sw = %+v", sw)
 	}
 }

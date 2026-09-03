@@ -236,6 +236,45 @@ func setFloat(set map[string]string, key string) *float64 {
 	return &v
 }
 
+// pricingInputs is the set of sizing/pricing facts buildResultDoc needs for
+// one test point, split by where they're sourced from: Set fields are real
+// benchctl inputs (also needed for pricing), Pricing fields are
+// dbarenactl-only metadata that no benchctl scenario declares as an input
+// (see TestPointDef.Pricing's doc comment) and are read only here.
+type pricingInputs struct {
+	instanceType           string
+	diskType               string
+	diskGB                 *float64
+	iops                   *float64
+	throughputMbps         *float64
+	dataCacheGB            *float64
+	warehouses             *float64
+	diskBaselineIOPS       *float64
+	diskBaselineThroughput *float64
+}
+
+// resolvePricingInputs reads pricingInputs from a test point definition.
+// instanceType falls back to def.Set["project_size"] when def.Pricing has no
+// db_instance_type -- the correct behavior for Supabase, whose project_size
+// doubles as its own compute SKU and which has no pricing: block at all.
+func resolvePricingInputs(def *manifest.TestPointDef) pricingInputs {
+	instanceType := def.Pricing["db_instance_type"]
+	if instanceType == "" {
+		instanceType = def.Set["project_size"]
+	}
+	return pricingInputs{
+		instanceType:           instanceType,
+		diskType:               def.Pricing["disk_type"],
+		diskGB:                 setFloat(def.Set, "disk_size_gb"),
+		iops:                   setFloat(def.Set, "disk_iops"),
+		throughputMbps:         setFloat(def.Set, "disk_throughput_mibps"),
+		dataCacheGB:            setFloat(def.Pricing, "data_cache_gb"),
+		warehouses:             setFloat(def.Set, "warehouses"),
+		diskBaselineIOPS:       setFloat(def.Pricing, "disk_baseline_iops"),
+		diskBaselineThroughput: setFloat(def.Pricing, "disk_baseline_throughput_mibps"),
+	}
+}
+
 func buildResultDoc(m *manifest.Manifest, tp *sweepstate.TestPoint, def *manifest.TestPointDef, successful []candidateRun, snapshot *pricing.Snapshot, manifestPath string) (*resultDoc, error) {
 	selected, peak, err := selectRepresentativeRun(successful)
 	if err != nil {
@@ -249,16 +288,11 @@ func buildResultDoc(m *manifest.Manifest, tp *sweepstate.TestPoint, def *manifes
 	}
 	scenario := scenarioSlug(tp.BoundType, tp.Tier, tp.Variant)
 
-	instanceType := def.Set["db_instance_type"]
-	if instanceType == "" {
-		instanceType = def.Set["project_size"]
-	}
-	diskType := def.Set["disk_type"]
-	diskGB := setFloat(def.Set, "disk_size_gb")
-	iops := setFloat(def.Set, "disk_iops")
-	throughputMbps := setFloat(def.Set, "disk_throughput_mibps")
-	diskBaselineIOPS := setFloat(def.Set, "disk_baseline_iops")
-	diskBaselineThroughput := setFloat(def.Set, "disk_baseline_throughput_mibps")
+	pi := resolvePricingInputs(def)
+	instanceType, diskType := pi.instanceType, pi.diskType
+	diskGB, iops, throughputMbps := pi.diskGB, pi.iops, pi.throughputMbps
+	dataCacheGB := pi.dataCacheGB
+	diskBaselineIOPS, diskBaselineThroughput := pi.diskBaselineIOPS, pi.diskBaselineThroughput
 
 	// Build sweep points from the selected run's own data only, across
 	// every concurrency level it has data for -- no other iteration
@@ -269,7 +303,7 @@ func buildResultDoc(m *manifest.Manifest, tp *sweepstate.TestPoint, def *manifes
 	}
 	sort.Ints(threads)
 
-	warehouses := setFloat(def.Set, "warehouses")
+	warehouses := pi.warehouses
 
 	var sweepPoints []sweepPointJSON
 	var engineVersion, cpuArch string
@@ -419,6 +453,9 @@ func buildResultDoc(m *manifest.Manifest, tp *sweepstate.TestPoint, def *manifes
 		}
 		if throughputMbps != nil {
 			costInput.ThroughputMbps = *throughputMbps
+		}
+		if dataCacheGB != nil {
+			costInput.DataCacheGB = *dataCacheGB
 		}
 		breakdown, err := calc.Cost(snapshot.Items, costInput)
 		if err != nil {

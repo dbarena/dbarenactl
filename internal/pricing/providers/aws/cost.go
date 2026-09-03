@@ -22,7 +22,7 @@ const StorageDocsURL = "https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/C
 // crosses the striping threshold and gets a higher baseline. That higher
 // baseline is never hardcoded here: a candidate manifest that provisions a
 // volume above the threshold states its own baseline explicitly via the
-// disk_baseline_iops/disk_baseline_throughput_mibps set: keys (see
+// disk_baseline_iops/disk_baseline_throughput_mibps pricing: keys (see
 // CostInput.DiskBaselineIOPS/DiskBaselineThroughputMbps), authored by
 // whoever decided to cross it, citing this same URL.
 const (
@@ -80,11 +80,11 @@ func (Calculator) Cost(items []pricing.Item, in pricing.CostInput) (*pricing.Cos
 
 	baselineIOPS, baselineIOPSSource := defaultBaselineIOPS, fmt.Sprintf("default gp3 baseline per %s", StorageDocsURL)
 	if in.DiskBaselineIOPS != nil {
-		baselineIOPS, baselineIOPSSource = *in.DiskBaselineIOPS, "set.disk_baseline_iops"
+		baselineIOPS, baselineIOPSSource = *in.DiskBaselineIOPS, "pricing.disk_baseline_iops"
 	}
 	baselineThroughput, baselineThroughputSource := float64(defaultBaselineThroughputMbps), fmt.Sprintf("default gp3 baseline per %s", StorageDocsURL)
 	if in.DiskBaselineThroughputMbps != nil {
-		baselineThroughput, baselineThroughputSource = *in.DiskBaselineThroughputMbps, "set.disk_baseline_throughput_mibps"
+		baselineThroughput, baselineThroughputSource = *in.DiskBaselineThroughputMbps, "pricing.disk_baseline_throughput_mibps"
 	}
 
 	computeUSD := computeItem.PriceUSD * pricing.HoursPerMonth

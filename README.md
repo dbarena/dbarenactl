@@ -118,11 +118,15 @@ actually run against.
 as a PR to `dbarena/dbarena`. For each test point it picks the one successful iteration
 whose peak-concurrency throughput is the median among that test point's iterations, and
 reports every field from that run alone -- iterations are never pooled or averaged
-together. Instance sizing (`db_instance_type`, `disk_size_gb`, `disk_iops`, `disk_type`,
-`disk_throughput_mibps`, and, for AWS tiers that cross a storage-baseline threshold,
-`disk_baseline_iops`/`disk_baseline_throughput_mibps`) is read from the candidate
-manifest's `set:` block, so re-running `results` after a manifest correction always
-reflects the corrected values, even for a sweep that ran before the correction. If a
+together. Instance sizing is read from the candidate manifest's `set:` block
+(`disk_size_gb`, `disk_iops`, `disk_throughput_mibps`) and its `pricing:` block
+(`db_instance_type`, `disk_type`, and, for AWS tiers that cross a storage-baseline
+threshold, `disk_baseline_iops`/`disk_baseline_throughput_mibps`) -- `pricing:` is
+dbarenactl-internal metadata, never forwarded to benchctl as a `--set` flag, for facts a
+benchctl scenario doesn't itself accept as an input but this command's cost calculators
+still need. Both are re-read from the manifest fresh on every `results` invocation, so
+re-running `results` after a manifest correction always reflects the corrected values,
+even for a sweep that ran before the correction. If a
 pricing snapshot is cached for the sweep's provider/product/plan/region, its monthly cost
 is computed and included (with a full per-component breakdown logged to
 `~/.dbarenactl/sweeps/<sweep-id>/logs/pricing-audit.log` for review before publishing);

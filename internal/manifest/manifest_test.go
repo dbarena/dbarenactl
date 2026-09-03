@@ -18,6 +18,9 @@ test_points:
     set:
       project_size: small
       disk_iops: "3000"
+    pricing:
+      db_instance_type: db.t4g.small
+      disk_type: gp3
   - tier: small
     bound_type: compute
     set:
@@ -41,6 +44,19 @@ func TestParse_Valid(t *testing.T) {
 	}
 	if m.TestPoints[0].Set["project_size"] != "small" {
 		t.Errorf("test point 0 set[project_size] = %q", m.TestPoints[0].Set["project_size"])
+	}
+	if got := m.TestPoints[0].Pricing["db_instance_type"]; got != "db.t4g.small" {
+		t.Errorf("test point 0 pricing[db_instance_type] = %q, want %q", got, "db.t4g.small")
+	}
+	if got := m.TestPoints[0].Pricing["disk_type"]; got != "gp3" {
+		t.Errorf("test point 0 pricing[disk_type] = %q, want %q", got, "gp3")
+	}
+	// A test point with no pricing: block at all must not error or panic on
+	// lookup -- Pricing is optional, and dbarenactl results relies on a nil
+	// map being safely indexable (see cmd/dbarenactl/results.go's use of
+	// def.Pricing/setFloat).
+	if got := m.TestPoints[1].Pricing["db_instance_type"]; got != "" {
+		t.Errorf("test point 1 (no pricing: block) pricing[db_instance_type] = %q, want empty", got)
 	}
 }
 
@@ -117,13 +133,16 @@ func TestParseTestPointRef_Invalid(t *testing.T) {
 
 func TestManifest_FindTestPoint(t *testing.T) {
 	m := &Manifest{TestPoints: []TestPointDef{
-		{Tier: "small", BoundType: "io"},
+		{Tier: "small", BoundType: "io", Pricing: map[string]string{"db_instance_type": "db.t4g.small"}},
 		{Tier: "large", BoundType: "io", Variant: "matched-to-rds"},
 	}}
 
 	d, ok := m.FindTestPoint("small", "io", "")
 	if !ok || d.Tier != "small" {
 		t.Errorf("FindTestPoint(small, io, \"\") = %+v, %v", d, ok)
+	}
+	if d.Pricing["db_instance_type"] != "db.t4g.small" {
+		t.Errorf("FindTestPoint(small, io, \"\").Pricing[db_instance_type] = %q", d.Pricing["db_instance_type"])
 	}
 
 	d, ok = m.FindTestPoint("large", "io", "matched-to-rds")

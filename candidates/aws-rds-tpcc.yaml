@@ -3,6 +3,27 @@
 # instance_type is the load driver's own EC2 instance type (independent of
 # project_size), set explicitly on every test point: c8gd.xlarge through xlarge, then
 # c8gd.2xlarge/4xlarge/8xlarge matching project_size at 2xlarge/4xlarge/8xlarge.
+#
+# 2026-09-01 correction: this file used to set `db_instance_type`, `disk_type`,
+# `disk_baseline_iops`, and `disk_baseline_throughput_mibps` inside `set:` on
+# every test point. NONE of these are inputs declared by
+# scenarios/rds-tpcc-tiers.yaml (verified directly against its `inputs:`
+# block) -- passing them there fails at benchctl parse time with `unknown
+# input "X" (not declared in scenario)`, which `dbarenactl run --dry-run`
+# does NOT catch (it only echoes the invocation it would make, it doesn't
+# validate parameter names against the target scenario). The RDS instance
+# class is derived automatically from `project_size` via the terraform
+# module's own `size_map` (see deployments/rds/postgres/main.tf) -- there is
+# no way to override it from benchctl, so `db_instance_type` was never a real
+# benchctl input. Storage type is likewise hardcoded to
+# `storage_type = "gp3"` in that same module (not a variable).
+#
+# These four fields are NOT dead, though: `dbarenactl results`'s cost
+# calculator (internal/pricing/providers/aws/cost.go) reads them to price
+# each test point, and they now live under each test point's `pricing:`
+# block instead -- a sibling to `set:` that dbarenactl reads for itself but
+# never forwards to benchctl. See docs/disk-sizing-formula-2026-09.md
+# (benchctl repo) for where the disk sizing itself comes from.
 provider: AWS
 product: RDS
 workload: tpcc
@@ -17,21 +38,23 @@ test_points:
       warehouses: "80"
       threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
-      db_instance_type: db.t4g.small
-      disk_type: gp3
       disk_size_gb: "20"
       disk_iops: "3000"
+    pricing:
+      db_instance_type: db.t4g.small
+      disk_type: gp3
   - tier: small
     bound_type: compute
     set:
       project_size: small
-      warehouses: "14"
+      warehouses: "8"
       threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
-      db_instance_type: db.t4g.small
-      disk_type: gp3
       disk_size_gb: "20"
       disk_iops: "3000"
+    pricing:
+      db_instance_type: db.t4g.small
+      disk_type: gp3
   # medium: db.t4g.medium, 32 GB / 3,000 IOPS (default, gp3 floor)
   - tier: medium
     bound_type: io
@@ -40,22 +63,32 @@ test_points:
       warehouses: "160"
       threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
-      db_instance_type: db.t4g.medium
-      disk_type: gp3
       disk_size_gb: "32"
       disk_iops: "3000"
+    pricing:
+      db_instance_type: db.t4g.medium
+      disk_type: gp3
+  # 2026-09-02 correction: disk_size_gb was "32" (io-bound's value) -- drops to the 20 GB floor
+  # per docs/compute-bound-sizing-formula-2026-09.md (2xRAM_GiB=8, floored to 20). Accepted by
+  # inference from xlarge, not independently tested -- see that doc's §2.2.
   - tier: medium
     bound_type: compute
     set:
       project_size: medium
-      warehouses: "28"
+      warehouses: "16"
       threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
+      disk_size_gb: "20"
+      disk_iops: "3000"
+    pricing:
       db_instance_type: db.t4g.medium
       disk_type: gp3
-      disk_size_gb: "32"
-      disk_iops: "3000"
-  # large: db.m6g.large, 64 GB / 3,000 IOPS
+  # large: db.m6g.large, 64 GB / 3,000 IOPS. Requesting 3,000 here rather than
+  # Supabase's/GCP's documented 3,600 Large baseline is a no-op for RDS
+  # specifically (AWS rejects the `iops` argument entirely below 400 GiB
+  # allocated storage, so 3,000 is the achieved value here regardless of what
+  # was requested -- see main.tf) -- explicit now for parity across all three
+  # platforms' candidate files, per docs/disk-sizing-formula-2026-09.md.
   - tier: large
     bound_type: io
     set:
@@ -63,24 +96,31 @@ test_points:
       warehouses: "320"
       threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
+      disk_size_gb: "64"
+      disk_iops: "3000"
+    pricing:
       db_instance_type: db.m6g.large
       disk_type: gp3
-      disk_size_gb: "64"
-      disk_iops: "3600"
+  # 2026-09-02 correction: disk_iops was "3600" -- a 64 GB volume is below the 400 GiB threshold
+  # where AWS accepts a custom iops value at all (see the xlarge/io comment below), so 3600 would
+  # have silently achieved 3,000 regardless. disk_size_gb was "64" (io-bound's value) -- drops to
+  # the 20 GB floor per docs/compute-bound-sizing-formula-2026-09.md. Both accepted by inference
+  # from xlarge, not independently tested -- see that doc's §2.2.
   - tier: large
     bound_type: compute
     set:
       project_size: large
-      warehouses: "56"
+      warehouses: "32"
       threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
+      disk_size_gb: "20"
+      disk_iops: "3000"
+    pricing:
       db_instance_type: db.m6g.large
       disk_type: gp3
-      disk_size_gb: "64"
-      disk_iops: "3600"
   # xlarge: db.m6g.xlarge. IO-bound explicitly crosses the 400 GiB threshold
   # to unlock 12,000 IOPS (matching Supabase's floor at that IOPS level, see
-  # candidates/supabase.yaml); compute-bound stays at the 128 GB/3,000 IOPS
+  # candidates/supabase-tpcc.yaml); compute-bound stays at the 128 GB/3,000 IOPS
   # default since it isn't disk-bound making this option cheaper.
   - tier: xlarge
     bound_type: io
@@ -89,24 +129,33 @@ test_points:
       warehouses: "640"
       disk_size_gb: "400"
       disk_iops: "12000"
+      threads: "1,2,4,8,16,24"
+      instance_type: c8gd.xlarge
+    pricing:
+      db_instance_type: db.m6g.xlarge
+      disk_type: gp3
       # per https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html — gp3's baseline jumps to 12,000 IOPS/500 MiB/s at >=400 GiB for Postgres
       disk_baseline_iops: "12000"
       disk_baseline_throughput_mibps: "500"
-      threads: "1,2,4,8,16,24"
-      instance_type: c8gd.xlarge
-      db_instance_type: db.m6g.xlarge
-      disk_type: gp3
+  # 2026-09-02 correction: disk_iops was "6000", contradicting the comment above this block
+  # ("compute-bound stays at the 128 GB/3,000 IOPS default") -- a 128 GB volume is below the
+  # 400 GiB custom-iops threshold, so 6000 would have silently achieved 3,000 regardless.
+  # disk_size_gb dropped 128->20 to align with Supabase's live-tested value (see
+  # docs/compute-bound-sizing-formula-2026-09.md §2.2 -- 20 GB passed comfortably at 64
+  # warehouses/24 threads; no reason for RDS to provision more here since it isn't disk-bound at
+  # this tier either).
   - tier: xlarge
     bound_type: compute
     set:
       project_size: xlarge
-      warehouses: "112"
+      warehouses: "64"
       threads: "1,2,4,8,16,24"
       instance_type: c8gd.xlarge
+      disk_size_gb: "20"
+      disk_iops: "3000"
+    pricing:
       db_instance_type: db.m6g.xlarge
       disk_type: gp3
-      disk_size_gb: "128"
-      disk_iops: "6000"
   # 2xlarge: db.m6g.2xlarge. Default allocated storage (256 GB) is still
   # below the 400 GiB custom-IOPS threshold, so IO-bound crosses it the same
   # way xlarge does, to unlock the documented 12,000 IOPS baseline.
@@ -118,24 +167,38 @@ test_points:
       warehouses: "1280"
       disk_size_gb: "400"
       disk_iops: "12000"
+      threads: "1,2,4,8,16,32,48"
+      instance_type: c8gd.2xlarge
+    pricing:
+      db_instance_type: db.m6g.2xlarge
+      disk_type: gp3
       # per https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html — gp3's baseline jumps to 12,000 IOPS/500 MiB/s at >=400 GiB for Postgres
       disk_baseline_iops: "12000"
       disk_baseline_throughput_mibps: "500"
-      threads: "1,2,4,8,16,32,48"
-      instance_type: c8gd.2xlarge
-      db_instance_type: db.m6g.2xlarge
-      disk_type: gp3
+  # 2026-09-02 correction: disk_iops was "6000" here (Supabase's own validated target at this
+  # tier per docs/compute-bound-sizing-formula-2026-09.md §2.3) -- but on RDS, disk_size_gb must
+  # already be forced to 400 (up from the 2xRAM_GiB value of 64) to unlock any custom iops at
+  # all (AWS rejects it entirely below that threshold, see the io row's comment above), and once
+  # forced there, AWS bundles 12,000 IOPS / 500 MiB/s automatically at zero extra cost over the
+  # storage itself. Deliberately dialing down to 6,000 would only reduce RDS's performance for no
+  # cost savings -- no real deployment would do that. So disk_iops=12000 here: take the free
+  # baseline rather than artificially under-provision. Throughput isn't independently settable
+  # once >=400 GiB (no `disk_throughput_mibps`/`storage_throughput` input exists on this
+  # scenario/module) -- RDS gets the bundled 500 MiB/s baseline automatically, see pricing block.
   - tier: 2xlarge
     bound_type: compute
     set:
       project_size: 2xlarge
-      warehouses: "224"
+      warehouses: "128"
       threads: "1,2,4,8,16,32,48"
       instance_type: c8gd.2xlarge
+      disk_size_gb: "400"
+      disk_iops: "12000"
+    pricing:
       db_instance_type: db.m6g.2xlarge
       disk_type: gp3
-      disk_size_gb: "256"
-      disk_iops: "12000"
+      disk_baseline_iops: "12000"
+      disk_baseline_throughput_mibps: "500"
   # 4xlarge: db.m6g.4xlarge. Default allocated storage (512 GB) is already
   # >= the 400 GiB threshold, so the size_map's 20,000 IOPS applies with no
   # override needed on either row for the achieved IOPS itself -- but the
@@ -150,23 +213,33 @@ test_points:
       warehouses: "2560"
       threads: "1,2,4,8,16,32,64,96"
       instance_type: c8gd.4xlarge
-      db_instance_type: db.m6g.4xlarge
-      disk_type: gp3
       disk_size_gb: "512"
       disk_iops: "20000"
+    pricing:
+      db_instance_type: db.m6g.4xlarge
+      disk_type: gp3
       disk_baseline_iops: "12000"
       disk_baseline_throughput_mibps: "500"
+  # 2026-09-02 correction: disk_size_gb/disk_iops were "512"/"20000" (this tier's own natural
+  # size_map default, reused from the io-bound row). docs/compute-bound-sizing-formula-2026-09.md
+  # §2.5/§3 live-tested and locked in disk_iops=12000/disk_throughput_mibps=500 on Supabase at
+  # this tier (matches the ceiling RDS gets forced into anyway once crossed to >=400 GiB -- see
+  # the 2xlarge comment above for why). disk_size_gb is right-sized down to 400 (the minimum
+  # crossing point) rather than reusing the natural 512 GB default, and disk_iops is dialed down
+  # from the natural 20,000 default to the tested 12,000 target. Throughput isn't independently
+  # settable once >=400 GiB -- bundled at the bottom-doc-cited ~500 MiB/s baseline regardless.
   - tier: 4xlarge
     bound_type: compute
     set:
       project_size: 4xlarge
-      warehouses: "448"
+      warehouses: "256"
       threads: "1,2,4,8,16,32,64,96"
       instance_type: c8gd.4xlarge
+      disk_size_gb: "400"
+      disk_iops: "12000"
+    pricing:
       db_instance_type: db.m6g.4xlarge
       disk_type: gp3
-      disk_size_gb: "512"
-      disk_iops: "20000"
       disk_baseline_iops: "12000"
       disk_baseline_throughput_mibps: "500"
   # 8xlarge: db.m6g.8xlarge. Default allocated storage (1024 GB) is already
@@ -183,22 +256,31 @@ test_points:
       warehouses: "5120"
       threads: "1,2,4,8,16,32,64,128,192"
       instance_type: c8gd.12xlarge
-      db_instance_type: db.m6g.8xlarge
-      disk_type: gp3
       disk_size_gb: "1024"
       disk_iops: "40000"
+    pricing:
+      db_instance_type: db.m6g.8xlarge
+      disk_type: gp3
       disk_baseline_iops: "12000"
       disk_baseline_throughput_mibps: "500"
+  # 2026-09-02 correction: disk_size_gb/disk_iops were "1024"/"40000" (this tier's own natural
+  # size_map default). docs/compute-bound-sizing-formula-2026-09.md §2.4 tested 3 configs on
+  # Supabase at this tier (A: 3000/125, B: 6000/250, both ruled out -- disk-throughput-bound; C:
+  # 12000/500, best result, locked in despite disk still running near 100% util -- see that doc
+  # for why PERFENG-111's max_wal_size checkpoint-storm fix isn't being waited on). Same
+  # right-sizing as 4xlarge: disk_size_gb dialed down to 400 (the minimum >=400 GiB crossing
+  # point), disk_iops dialed down from the natural 40,000 default to the tested 12,000 target.
   - tier: 8xlarge
     bound_type: compute
     set:
       project_size: 8xlarge
-      warehouses: "896"
+      warehouses: "512"
       threads: "1,2,4,8,16,32,64,128,192"
       instance_type: c8gd.12xlarge
+      disk_size_gb: "400"
+      disk_iops: "12000"
+    pricing:
       db_instance_type: db.m6g.8xlarge
       disk_type: gp3
-      disk_size_gb: "1024"
-      disk_iops: "40000"
       disk_baseline_iops: "12000"
       disk_baseline_throughput_mibps: "500"

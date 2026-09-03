@@ -33,6 +33,7 @@ func enterprisePlusNItemSet() []pricing.Item {
 		{SKU: "VCPU", Description: "Cloud SQL for PostgreSQL: Zonal - Enterprise Plus N vCPU in Carolina", PriceUSD: 0.0537},
 		{SKU: "RAM", Description: "Cloud SQL for PostgreSQL: Zonal - Enterprise Plus N RAM in Carolina", PriceUSD: 0.0091},
 		{SKU: "STORAGE", Description: "Cloud SQL for PostgreSQL: Zonal - Enterprise Plus Standard Storage in Carolina", PriceUSD: 0.17},
+		{SKU: "DATA-CACHE", Description: "Cloud SQL for PostgreSQL: Zonal - Enterprise Plus Data Cache Storage in Carolina", PriceUSD: 0.16},
 	}
 }
 
@@ -199,6 +200,77 @@ func TestCost_IOPSOverage_MissingSKU_Errors(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected an error: overage is requested but no IOPS SKU exists to price it")
+	}
+}
+
+// TestCost_DataCache_NotRequestedByDefault_NotBilled confirms a test point
+// that doesn't request a data cache at all never needs a Data Cache SKU to
+// price it -- only one that actually requests a nonzero DataCacheGB does.
+func TestCost_DataCache_NotRequestedByDefault_NotBilled(t *testing.T) {
+	c := Calculator{}
+	bd, err := c.Cost(enterpriseN4ItemSet(), pricing.CostInput{
+		InstanceType: "db-custom-N4-2-4096", DiskGB: 32, DiskType: "HYPERDISK_BALANCED",
+	})
+	if err != nil {
+		t.Fatalf("Cost: %v", err)
+	}
+	if got := componentUSD(bd, "data_cache"); got != 0 {
+		t.Errorf("data_cache = %v, want 0 (no data cache requested, and no Data Cache SKU exists in this item set)", got)
+	}
+}
+
+// TestCost_DataCache_BilledWhenRequested confirms GCP Cloud SQL Enterprise
+// Plus's Data Cache line item -- previously never computed at all -- is now
+// billed and folded into the total when a candidate requests one.
+func TestCost_DataCache_BilledWhenRequested(t *testing.T) {
+	c := Calculator{}
+	bd, err := c.Cost(enterprisePlusNItemSet(), pricing.CostInput{
+		InstanceType: "db-perf-optimized-N-2", DiskGB: 128, DiskType: "PD_SSD", DataCacheGB: 375,
+	})
+	if err != nil {
+		t.Fatalf("Cost: %v", err)
+	}
+	want := 0.16 * 375
+	if got := componentUSD(bd, "data_cache"); !approxEqual(got, want) {
+		t.Errorf("data_cache = %v, want %v", got, want)
+	}
+	wantTotal := 0.0537*2*pricing.HoursPerMonth + 0.0091*16*pricing.HoursPerMonth + 0.17*128 + want
+	if !approxEqual(bd.TotalUSD, wantTotal) {
+		t.Errorf("TotalUSD = %v, want %v (data_cache must be folded into the total)", bd.TotalUSD, wantTotal)
+	}
+}
+
+// TestCost_DataCache_DisambiguatesFamilyDecoy proves the N-series Data Cache
+// SKU -- which, unlike vCPU/RAM, carries no family token in its own
+// description -- is still picked over a same-edition C4-series decoy that
+// does name a family.
+func TestCost_DataCache_DisambiguatesFamilyDecoy(t *testing.T) {
+	items := append(enterprisePlusNItemSet(),
+		pricing.Item{SKU: "DECOY-C4-DATA-CACHE", Description: "Cloud SQL for PostgreSQL: Zonal - Enterprise Plus C4 Data Cache Storage in South Carolina", PriceUSD: 0.21},
+	)
+	c := Calculator{}
+	bd, err := c.Cost(items, pricing.CostInput{
+		InstanceType: "db-perf-optimized-N-2", DiskGB: 128, DiskType: "PD_SSD", DataCacheGB: 375,
+	})
+	if err != nil {
+		t.Fatalf("Cost: %v", err)
+	}
+	want := 0.16 * 375
+	if got := componentUSD(bd, "data_cache"); !approxEqual(got, want) {
+		t.Errorf("data_cache = %v, want %v (should pick the N-series SKU, not the C4 decoy)", got, want)
+	}
+}
+
+// TestCost_DataCache_MissingSKU_Errors confirms a requested data cache with
+// no matching SKU in the snapshot fails loudly rather than silently pricing
+// it at zero.
+func TestCost_DataCache_MissingSKU_Errors(t *testing.T) {
+	c := Calculator{}
+	_, err := c.Cost(enterprisePlusNItemSet()[:3], pricing.CostInput{ // drop the Data Cache item
+		InstanceType: "db-perf-optimized-N-2", DiskGB: 128, DiskType: "PD_SSD", DataCacheGB: 375,
+	})
+	if err == nil {
+		t.Fatal("expected an error: a data cache is requested but no Data Cache SKU exists to price it")
 	}
 }
 

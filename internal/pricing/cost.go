@@ -20,11 +20,16 @@ type CostInput struct {
 	DiskGB         float64
 	IOPS           float64
 	ThroughputMbps float64
+	// DataCacheGB is the provisioned size of a separately-billed data cache
+	// (e.g. GCP Cloud SQL Enterprise Plus's Data Cache), when the provider/
+	// tier has one. Zero means "no data cache to bill" -- not every provider
+	// or tier has this component.
+	DataCacheGB float64
 	// DiskBaselineIOPS/DiskBaselineThroughputMbps are the free/included disk
 	// performance for this specific configuration, when a candidate manifest
 	// states one explicitly (the disk_baseline_iops/
-	// disk_baseline_throughput_mibps set: keys) -- nil means "the calculator
-	// should use its own documented default baseline".
+	// disk_baseline_throughput_mibps pricing: keys) -- nil means "the
+	// calculator should use its own documented default baseline".
 	DiskBaselineIOPS           *float64
 	DiskBaselineThroughputMbps *float64
 }

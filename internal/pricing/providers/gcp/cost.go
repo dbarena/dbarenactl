@@ -116,9 +116,9 @@ func (Calculator) Cost(items []pricing.Item, in pricing.CostInput) (*pricing.Cos
 	// don't repeat the machine family the way vCPU/RAM ones do (e.g.
 	// "Enterprise Storage Hyperdisk Balanced Capacity" has no "N4" in it), so
 	// it can't be guessed from the tier string -- it must come from the
-	// candidate manifest's set: disk_type.
+	// candidate manifest's pricing: disk_type.
 	if in.DiskType == "" {
-		return nil, fmt.Errorf("gcp: cost: disk_type is required (set: disk_type in the candidate manifest, e.g. %q or %q) -- GCP Cloud SQL prices differ by disk type and cannot be guessed from the tier string alone", "HYPERDISK_BALANCED", "PD_SSD")
+		return nil, fmt.Errorf("gcp: cost: disk_type is required (pricing: disk_type in the candidate manifest, e.g. %q or %q) -- GCP Cloud SQL prices differ by disk type and cannot be guessed from the tier string alone", "HYPERDISK_BALANCED", "PD_SSD")
 	}
 	if in.DiskType != "HYPERDISK_BALANCED" && in.DiskType != "PD_SSD" {
 		return nil, fmt.Errorf("gcp: cost: unsupported disk_type %q -- expected %q or %q", in.DiskType, "HYPERDISK_BALANCED", "PD_SSD")
@@ -158,11 +158,11 @@ func (Calculator) Cost(items []pricing.Item, in pricing.CostInput) (*pricing.Cos
 
 	baselineIOPS, baselineIOPSSource := defaultBaselineIOPS, fmt.Sprintf("default per %s (Hyperdisk Balanced has no included/free IOPS)", HyperdiskDocsURL)
 	if in.DiskBaselineIOPS != nil {
-		baselineIOPS, baselineIOPSSource = *in.DiskBaselineIOPS, "set.disk_baseline_iops"
+		baselineIOPS, baselineIOPSSource = *in.DiskBaselineIOPS, "pricing.disk_baseline_iops"
 	}
 	baselineThroughput, baselineThroughputSource := defaultBaselineThroughputMbps, fmt.Sprintf("default per %s (Hyperdisk Balanced has no included/free throughput)", HyperdiskDocsURL)
 	if in.DiskBaselineThroughputMbps != nil {
-		baselineThroughput, baselineThroughputSource = *in.DiskBaselineThroughputMbps, "set.disk_baseline_throughput_mibps"
+		baselineThroughput, baselineThroughputSource = *in.DiskBaselineThroughputMbps, "pricing.disk_baseline_throughput_mibps"
 	}
 	iopsOverage := maxFloat(0, in.IOPS-baselineIOPS)
 	throughputOverage := maxFloat(0, in.ThroughputMbps-baselineThroughput)
@@ -197,6 +197,31 @@ func (Calculator) Cost(items []pricing.Item, in pricing.CostInput) (*pricing.Cos
 			throughputItem.SKU, baselineThroughput, baselineThroughputSource, in.ThroughputMbps, throughputOverage, throughputItem.PriceUSD, throughputUSD)
 	}
 
+	var dataCacheUSD float64
+	dataCacheDetail := fmt.Sprintf("data_cache_gb=%g -- not billed (no data cache provisioned)", in.DataCacheGB)
+	if in.DataCacheGB > 0 {
+		dataCacheItem, err := findOneItem(items, func(it pricing.Item) bool {
+			if !containsAllFold(it.Description, "data cache") || !descHasEdition(it.Description, pt.Edition) {
+				return false
+			}
+			// Unlike vCPU/RAM, Data Cache SKUs aren't consistently
+			// family-qualified: the real catalog's N-series Data Cache row
+			// carries no family token at all ("Enterprise Plus Data Cache
+			// Storage in Carolina"), while a C4-series decoy explicitly
+			// names its family ("Enterprise Plus C4 Data Cache Storage in
+			// South Carolina"). Match ours by family when the description
+			// does name one, and otherwise accept it as long as it isn't
+			// naming a different, known family.
+			return matchesFamily(it.Description, pt.Family) || !matchesFamily(it.Description, "C4")
+		}, fmt.Sprintf("Data Cache rate (edition=%s family=%s)", pt.Edition, pt.Family))
+		if err != nil {
+			return nil, err
+		}
+		dataCacheUSD = dataCacheItem.PriceUSD * in.DataCacheGB
+		dataCacheDetail = fmt.Sprintf("sku=%s rate=$%.6f/GiB-mo x %g GB = $%.2f",
+			dataCacheItem.SKU, dataCacheItem.PriceUSD, in.DataCacheGB, dataCacheUSD)
+	}
+
 	vcpuUSD := vcpuItem.PriceUSD * pt.VCPU * pricing.HoursPerMonth
 	ramUSD := ramItem.PriceUSD * pt.RAMGB * pricing.HoursPerMonth
 	storageUSD := storageItem.PriceUSD * in.DiskGB
@@ -223,8 +248,9 @@ func (Calculator) Cost(items []pricing.Item, in pricing.CostInput) (*pricing.Cos
 			},
 			{Name: "iops_overage", AmountUSD: iopsUSD, Detail: iopsDetail},
 			{Name: "throughput_overage", AmountUSD: throughputUSD, Detail: throughputDetail},
+			{Name: "data_cache", AmountUSD: dataCacheUSD, Detail: dataCacheDetail},
 		},
-		TotalUSD: vcpuUSD + ramUSD + storageUSD + iopsUSD + throughputUSD,
+		TotalUSD: vcpuUSD + ramUSD + storageUSD + iopsUSD + throughputUSD + dataCacheUSD,
 	}
 	return breakdown, nil
 }
@@ -250,7 +276,7 @@ func descHasEdition(desc string, ed edition) bool {
 // inside "C4A" -- both real, concurrently-priced families in the same
 // catalog.
 func matchesFamily(desc, family string) bool {
-	return regexp.MustCompile(`(?i)\b`+regexp.QuoteMeta(family)+`\b`).MatchString(desc)
+	return regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(family) + `\b`).MatchString(desc)
 }
 
 // matchesDiskTypeKeyword reports whether desc is priced for the given disk

@@ -81,6 +81,14 @@ type TestPointDef struct {
 	BoundType string            `yaml:"bound_type"`
 	Variant   string            `yaml:"variant,omitempty"`
 	Set       map[string]string `yaml:"set"`
+	// Pricing holds dbarenactl-internal sizing facts (e.g. db_instance_type,
+	// disk_type, disk_baseline_iops, disk_baseline_throughput_mibps) used by
+	// `dbarenactl results`'s cost calculators. Deliberately separate from Set:
+	// Set's keys are forwarded verbatim as --set flags to benchctl (see
+	// internal/planner), and none of these are inputs any benchctl scenario
+	// declares -- passing them there fails with "unknown input". Pricing is
+	// never read by the planner/scheduler, only by cmd/dbarenactl/results.go.
+	Pricing map[string]string `yaml:"pricing,omitempty"`
 }
 
 // Key uniquely identifies a test point within a manifest.

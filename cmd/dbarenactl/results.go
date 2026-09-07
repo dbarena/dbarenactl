@@ -137,14 +137,14 @@ func runResults(_ *cobra.Command, args []string) error {
 			if r.Outcome != "success" || r.LocalArtifactDir == "" {
 				continue
 			}
-			metrics, err := loadRunMetrics(r.LocalArtifactDir)
+			metrics, rawSamples, err := loadRunMetrics(r.LocalArtifactDir)
 			if err != nil {
 				return fmt.Errorf("dbarenactl results: %s: read artifacts for run %s: %w", scenario, r.RunID, err)
 			}
 			if len(metrics) == 0 {
 				continue
 			}
-			successful = append(successful, candidateRun{run: r, metricsByThreads: metrics})
+			successful = append(successful, candidateRun{run: r, metricsByThreads: metrics, rawSamplesByThreads: rawSamples})
 		}
 
 		if len(successful) < tp.SuccessesNeeded && !resultsForce {
@@ -159,7 +159,30 @@ func runResults(_ *cobra.Command, args []string) error {
 			continue
 		}
 
-		doc, err := buildResultDoc(m, tp, def, successful, snapshot, manifestPath)
+		provider, err := providerSlug(m.Provider)
+		if err != nil {
+			return err
+		}
+		// Computed before buildResultDoc (not after, as result.json's own
+		// write used to be) so buildResultDoc can write raw-clients-<n>.csv
+		// into it directly, alongside setting the matching iteration's
+		// raw_metrics_file -- doc and CSV need to agree with each other,
+		// and buildResultDoc is the one place that already knows which
+		// iteration was selected.
+		scenarioDir := filepath.Join(dest, "results", provider, m.Workload, scenario)
+		if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
+			return fmt.Errorf("dbarenactl results: %s: %w", scenario, err)
+		}
+
+		doc, err := buildResultDoc(resultDocInputs{
+			Manifest:     m,
+			TestPoint:    tp,
+			Def:          def,
+			Successful:   successful,
+			Snapshot:     snapshot,
+			ManifestPath: manifestPath,
+			ScenarioDir:  scenarioDir,
+		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: skipping %s: %v\n", scenario, err)
 			skipped = append(skipped, scenario)
@@ -171,10 +194,6 @@ func runResults(_ *cobra.Command, args []string) error {
 				len(successful), tp.SuccessesNeeded))
 		}
 
-		provider, err := providerSlug(m.Provider)
-		if err != nil {
-			return err
-		}
 		data, err := json.MarshalIndent(doc, "", "  ")
 		if err != nil {
 			return fmt.Errorf("dbarenactl results: %s: marshal result.json: %w", scenario, err)
@@ -185,10 +204,6 @@ func runResults(_ *cobra.Command, args []string) error {
 			}
 		}
 
-		scenarioDir := filepath.Join(dest, "results", provider, m.Workload, scenario)
-		if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
-			return fmt.Errorf("dbarenactl results: %s: %w", scenario, err)
-		}
 		if err := os.WriteFile(filepath.Join(scenarioDir, "result.json"), append(data, '\n'), 0o644); err != nil {
 			return fmt.Errorf("dbarenactl results: %s: %w", scenario, err)
 		}
@@ -275,155 +290,106 @@ func resolvePricingInputs(def *manifest.TestPointDef) pricingInputs {
 	}
 }
 
-func buildResultDoc(m *manifest.Manifest, tp *sweepstate.TestPoint, def *manifest.TestPointDef, successful []candidateRun, snapshot *pricing.Snapshot, manifestPath string) (*resultDoc, error) {
-	selected, peak, err := selectRepresentativeRun(successful)
+// resultDocInputs bundles buildResultDoc's inputs. A plain struct instead
+// of positional params mainly because manifestPath and scenarioDir are two
+// adjacent, easily-swapped strings with very different meanings, and
+// because every one of these already has to converge on the orchestrator
+// regardless of how its body is split into sub-functions.
+type resultDocInputs struct {
+	Manifest     *manifest.Manifest
+	TestPoint    *sweepstate.TestPoint
+	Def          *manifest.TestPointDef
+	Successful   []candidateRun
+	Snapshot     *pricing.Snapshot
+	ManifestPath string
+	ScenarioDir  string
+}
+
+// buildResultDoc assembles one test point's result.json. It's a thin
+// orchestrator over four independent pieces -- buildSweepPoints,
+// buildInstanceInfo, buildReproducibility, computePricing -- each of which
+// takes only what it needs, not this function's full input set.
+func buildResultDoc(in resultDocInputs) (*resultDoc, error) {
+	selected, _, err := selectRepresentativeRun(in.Successful)
 	if err != nil {
 		return nil, err
 	}
-	_ = peak
 
-	provider, err := providerSlug(m.Provider)
+	provider, err := providerSlug(in.Manifest.Provider)
 	if err != nil {
 		return nil, err
 	}
-	scenario := scenarioSlug(tp.BoundType, tp.Tier, tp.Variant)
+	scenario := scenarioSlug(in.TestPoint.BoundType, in.TestPoint.Tier, in.TestPoint.Variant)
+	pi := resolvePricingInputs(in.Def)
 
-	pi := resolvePricingInputs(def)
-	instanceType, diskType := pi.instanceType, pi.diskType
-	diskGB, iops, throughputMbps := pi.diskGB, pi.iops, pi.throughputMbps
-	dataCacheGB := pi.dataCacheGB
-	diskBaselineIOPS, diskBaselineThroughput := pi.diskBaselineIOPS, pi.diskBaselineThroughput
-
-	// Build sweep points from the selected run's own data only, across
-	// every concurrency level it has data for -- no other iteration
-	// contributes anything to this result.
-	var threads []int
-	for t := range selected.metricsByThreads {
-		threads = append(threads, t)
-	}
-	sort.Ints(threads)
-
-	warehouses := pi.warehouses
-
-	var sweepPoints []sweepPointJSON
-	var engineVersion, cpuArch string
-	measuredFrom, measuredTo := selected.run.CreatedAt, selected.run.UpdatedAt
-	for _, c := range successful {
-		if c.run.CreatedAt.Before(measuredFrom) {
-			measuredFrom = c.run.CreatedAt
-		}
-		if c.run.UpdatedAt.After(measuredTo) {
-			measuredTo = c.run.UpdatedAt
-		}
+	sp, err := buildSweepPoints(scenario, in.Successful, selected, pi.warehouses, in.ScenarioDir)
+	if err != nil {
+		return nil, err
 	}
 
-	for _, concurrency := range threads {
-		records := selected.metricsByThreads[concurrency]
-		tpm, err := tpmCAt(records)
-		if err != nil {
-			return nil, fmt.Errorf("%s: concurrency %d: %w", scenario, concurrency, err)
-		}
-		p50, p95, p99, err := latencyFor(records, "NEW_ORDER")
-		if err != nil {
-			return nil, fmt.Errorf("%s: concurrency %d: %w", scenario, concurrency, err)
-		}
-		txns, errs, err := buildTxnMetrics(records)
-		if err != nil {
-			return nil, fmt.Errorf("%s: concurrency %d: %w", scenario, concurrency, err)
-		}
-		if v, arch := pgVersionInfo(records); v != "" {
-			engineVersion, cpuArch = v, arch
-		}
+	pricingFetcherKey := in.Manifest.PricingFetcherKey()
+	instance := buildInstanceInfo(in.Snapshot, pricingFetcherKey, pi, sp.CPUArch, sp.EngineVersion)
+	repro := buildReproducibility(in.Manifest, in.TestPoint, in.ManifestPath)
 
-		var workloadParams map[string]any
-		if warehouses != nil {
-			workloadParams = map[string]any{"warehouses": *warehouses}
-		}
-
-		// Every successful iteration with data at this concurrency is
-		// listed -- not just the one used for summary/workload_metrics
-		// below -- so a reader can see the full spread. Sorted by
-		// iteration number for a stable, readable order.
-		var iterations []iterationEntry
-		for _, c := range successful {
-			candidateRecords, ok := c.metricsByThreads[concurrency]
-			if !ok {
-				continue
-			}
-			candidateTpm, err := tpmCAt(candidateRecords)
-			if err != nil {
-				return nil, fmt.Errorf("%s: concurrency %d: run %s: %w", scenario, concurrency, c.run.RunID, err)
-			}
-			var notes *string
-			if c.run.RunID == selected.run.RunID {
-				notes = strPtr("This iteration's data (median tpmC at this test point's peak concurrency) is used " +
-					"for summary/workload_metrics below; the other iterations are listed for reference only. " +
-					"started_at/completed_at reflect the whole run's span, not this specific concurrency point -- " +
-					"dbarenactl does not currently capture per-fixture timestamps.")
-			} else {
-				notes = strPtr("started_at/completed_at reflect the whole run's span, not this specific " +
-					"concurrency point -- dbarenactl does not currently capture per-fixture timestamps.")
-			}
-			iterations = append(iterations, iterationEntry{
-				Iteration:      c.run.IterationAttempt,
-				StartedAt:      c.run.CreatedAt.UTC().Format(time.RFC3339),
-				CompletedAt:    c.run.UpdatedAt.UTC().Format(time.RFC3339),
-				Throughput:     candidateTpm,
-				RawMetricsFile: nil,
-				Notes:          notes,
-			})
-		}
-		sort.Slice(iterations, func(i, j int) bool { return iterations[i].Iteration < iterations[j].Iteration })
-
-		sweepPoints = append(sweepPoints, sweepPointJSON{
-			Concurrency:        concurrency,
-			WorkloadParameters: workloadParams,
-			Iterations:         iterations,
-			Summary: summaryInfo{
-				Throughput: throughputInfo{Metric: "tpmC", Unit: "transactions/min", Transaction: strPtr("NEW_ORDER"), Value: tpm},
-				LatencyMs:  latencyInfo{Transaction: strPtr("NEW_ORDER"), P50: p50, P95: p95, P99: p99},
-			},
-			WorkloadMetrics: &workloadMetrics{Transactions: txns, Errors: errs},
-		})
-	}
-	if len(sweepPoints) == 0 {
-		return nil, fmt.Errorf("%s: selected run %s has no concurrency levels with data", scenario, selected.run.RunID)
+	pricingOut, err := computePricing(in.Snapshot, pricingFetcherKey, pi, in.TestPoint.SweepID, scenario, sp.Points)
+	if err != nil {
+		return nil, err
 	}
 
-	// vcpu/ram_gb, when a pricing snapshot is available to derive them from.
+	return &resultDoc{
+		SchemaVersion:   "1.0.0",
+		Provider:        provider,
+		Workload:        in.Manifest.Workload,
+		Scenario:        scenario,
+		Tier:            strPtr(in.TestPoint.Tier),
+		BoundType:       in.TestPoint.BoundType,
+		Variant:         strPtr(in.TestPoint.Variant),
+		Instance:        instance,
+		MeasuredFrom:    sp.MeasuredFrom.UTC().Format(time.RFC3339),
+		MeasuredTo:      sp.MeasuredTo.UTC().Format(time.RFC3339),
+		Reproducibility: repro,
+		Pricing:         pricingOut,
+		Sweep:           sp.Points,
+	}, nil
+}
+
+// buildInstanceInfo resolves vcpu/ram_gb (when a pricing snapshot is
+// available to derive them from) and assembles the result's instance block.
+func buildInstanceInfo(snapshot *pricing.Snapshot, pricingFetcherKey string, pi pricingInputs, cpuArch, engineVersion string) *instanceInfo {
 	var vcpu, ramGB *float64
-	if snapshot != nil && instanceType != "" {
-		if fn, ok := newVCPURAMFuncs()[m.PricingFetcherKey()]; ok {
-			if v, r, err := fn(snapshot.Items, instanceType); err == nil {
+	if snapshot != nil && pi.instanceType != "" {
+		if fn, ok := newVCPURAMFuncs()[pricingFetcherKey]; ok {
+			if v, r, err := fn(snapshot.Items, pi.instanceType); err == nil {
 				vcpu, ramGB = &v, &r
 			}
 		}
 	}
-
-	instance := &instanceInfo{
-		InstanceType:   strPtr(instanceType),
+	return &instanceInfo{
+		InstanceType:   strPtr(pi.instanceType),
 		VCPU:           vcpu,
 		RAMGB:          ramGB,
-		DiskGB:         diskGB,
-		IOPS:           iops,
-		ThroughputMbps: throughputMbps,
+		DiskGB:         pi.diskGB,
+		IOPS:           pi.iops,
+		ThroughputMbps: pi.throughputMbps,
 		CPUArch:        strPtr(cpuArch),
 		EngineVersion:  strPtr(engineVersion),
 	}
+}
 
-	// reproducibility.command is the dbarenactl-level invocation that
-	// reproduces this exact test point -- not a raw benchctl command. That
-	// sidesteps ever needing to redact a run-supplied value (e.g.
-	// supabase_org_id) from it, since no --set list is shown at all: every
-	// value that would have appeared there (warehouses, disk sizing, ...) is
-	// already reported in `instance`/`sweep[].workload_parameters` above.
+// buildReproducibility builds reproducibility.command: the dbarenactl-level
+// invocation that reproduces this exact test point, not a raw benchctl
+// command. That sidesteps ever needing to redact a run-supplied value (e.g.
+// supabase_org_id) from it, since no --set list is shown at all: every
+// value that would have appeared there (warehouses, disk sizing, ...) is
+// already reported in instance/sweep[].workload_parameters.
+func buildReproducibility(m *manifest.Manifest, tp *sweepstate.TestPoint, manifestPath string) reproducibility {
 	absManifestPath, err := filepath.Abs(manifestPath)
 	if err != nil {
 		absManifestPath = manifestPath
 	}
 	testPointKey := manifest.TestPointDef{Tier: tp.Tier, BoundType: tp.BoundType, Variant: tp.Variant}.Key()
 	command := fmt.Sprintf("dbarenactl run --candidate %s --test-point %s", repoRelativePath(absManifestPath), testPointKey)
-	repro := reproducibility{
+	return reproducibility{
 		BenchctlVersion: nil,
 		LoadGenerator:   loadGeneratorInfo{Name: strPtr("https://github.com/supabase/go-tpc/"), Version: nil},
 		ScenarioRepo:    scenarioRepoInfo{URL: nil, Commit: nil},
@@ -434,61 +400,56 @@ func buildResultDoc(m *manifest.Manifest, tp *sweepstate.TestPoint, def *manifes
 			"above. benchctl_version, load_generator.version, and scenario_repo are not currently captured by " +
 			"dbarenactl or benchctl."),
 	}
+}
 
-	var pricingOut *pricingInfo
-	if snapshot != nil {
-		calc, ok := newCostCalculators()[m.PricingFetcherKey()]
-		if !ok {
-			return nil, fmt.Errorf("%s: no cost calculator registered for %q", scenario, m.PricingFetcherKey())
-		}
-		costInput := pricing.CostInput{
-			InstanceType: instanceType, DiskType: diskType,
-			DiskBaselineIOPS: diskBaselineIOPS, DiskBaselineThroughputMbps: diskBaselineThroughput,
-		}
-		if diskGB != nil {
-			costInput.DiskGB = *diskGB
-		}
-		if iops != nil {
-			costInput.IOPS = *iops
-		}
-		if throughputMbps != nil {
-			costInput.ThroughputMbps = *throughputMbps
-		}
-		if dataCacheGB != nil {
-			costInput.DataCacheGB = *dataCacheGB
-		}
-		breakdown, err := calc.Cost(snapshot.Items, costInput)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: %s: could not compute pricing: %v -- writing pricing: null\n", scenario, err)
-		} else {
-			if err := appendPricingAuditLog(tp.SweepID, scenario, costInput, snapshot, breakdown); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: %s: could not write pricing audit log: %v\n", scenario, err)
-			}
-			pricingOut = &pricingInfo{
-				MonthlyUSD: breakdown.TotalUSD, HoursPerMonth: pricing.HoursPerMonth,
-				PricingModel: "on-demand-list-price",
-				Source:       strPtr(fmt.Sprintf("dbarenactl pricing snapshot %s, fetched %s", snapshot.ID, snapshot.FetchedAt.UTC().Format(time.RFC3339))),
-			}
-			for i := range sweepPoints {
-				v := sweepPoints[i].Summary.Throughput.Value / pricingOut.MonthlyUSD
-				sweepPoints[i].Summary.TpmcPerDollarMonth = &v
-			}
-		}
+// computePricing computes the result's pricing block and backfills
+// tpmc_per_dollar_month onto every sweep point in place. Returns (nil, nil)
+// when there's no pricing snapshot -- pricing: null is expected, not an
+// error. Returns an error only when a snapshot exists but no cost
+// calculator is registered for pricingFetcherKey (a real configuration
+// bug, and today the caller treats it as fatal for this test point); a
+// per-run cost-computation failure is a warning (pricing: null), not an
+// error.
+func computePricing(snapshot *pricing.Snapshot, pricingFetcherKey string, pi pricingInputs, sweepID, scenario string, points []sweepPointJSON) (*pricingInfo, error) {
+	if snapshot == nil {
+		return nil, nil
 	}
-
-	return &resultDoc{
-		SchemaVersion:   "1.0.0",
-		Provider:        provider,
-		Workload:        m.Workload,
-		Scenario:        scenario,
-		Tier:            strPtr(tp.Tier),
-		BoundType:       tp.BoundType,
-		Variant:         strPtr(tp.Variant),
-		Instance:        instance,
-		MeasuredFrom:    measuredFrom.UTC().Format(time.RFC3339),
-		MeasuredTo:      measuredTo.UTC().Format(time.RFC3339),
-		Reproducibility: repro,
-		Pricing:         pricingOut,
-		Sweep:           sweepPoints,
-	}, nil
+	calc, ok := newCostCalculators()[pricingFetcherKey]
+	if !ok {
+		return nil, fmt.Errorf("%s: no cost calculator registered for %q", scenario, pricingFetcherKey)
+	}
+	costInput := pricing.CostInput{
+		InstanceType: pi.instanceType, DiskType: pi.diskType,
+		DiskBaselineIOPS: pi.diskBaselineIOPS, DiskBaselineThroughputMbps: pi.diskBaselineThroughput,
+	}
+	if pi.diskGB != nil {
+		costInput.DiskGB = *pi.diskGB
+	}
+	if pi.iops != nil {
+		costInput.IOPS = *pi.iops
+	}
+	if pi.throughputMbps != nil {
+		costInput.ThroughputMbps = *pi.throughputMbps
+	}
+	if pi.dataCacheGB != nil {
+		costInput.DataCacheGB = *pi.dataCacheGB
+	}
+	breakdown, err := calc.Cost(snapshot.Items, costInput)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %s: could not compute pricing: %v -- writing pricing: null\n", scenario, err)
+		return nil, nil
+	}
+	if err := appendPricingAuditLog(sweepID, scenario, costInput, snapshot, breakdown); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %s: could not write pricing audit log: %v\n", scenario, err)
+	}
+	pricingOut := &pricingInfo{
+		MonthlyUSD: breakdown.TotalUSD, HoursPerMonth: pricing.HoursPerMonth,
+		PricingModel: "on-demand-list-price",
+		Source:       strPtr(fmt.Sprintf("dbarenactl pricing snapshot %s, fetched %s", snapshot.ID, snapshot.FetchedAt.UTC().Format(time.RFC3339))),
+	}
+	for i := range points {
+		v := points[i].Summary.Throughput.Value / pricingOut.MonthlyUSD
+		points[i].Summary.TpmcPerDollarMonth = &v
+	}
+	return pricingOut, nil
 }

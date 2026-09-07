@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/dbarena/dbarenactl/internal/bench"
 	"github.com/dbarena/dbarenactl/internal/manifest"
 	"github.com/dbarena/dbarenactl/internal/planner"
 	"github.com/dbarena/dbarenactl/internal/scheduler"
@@ -134,6 +135,10 @@ func runRun(cmd *cobra.Command, _ []string) error {
 
 	if runDryRun {
 		return printDryRun(sweepID, m)
+	}
+
+	if err := bench.CheckAvailable(runBenchctlBin); err != nil {
+		return err
 	}
 
 	dbFile, err := dbPath()

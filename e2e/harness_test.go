@@ -246,7 +246,15 @@ type runResult struct {
 // don't have to repeat it.
 func runDbarenactl(t *testing.T, env map[string]string, stdin string, args ...string) runResult {
 	t.Helper()
-	args = append(args, "--benchctl-bin="+fakeBenchctlBin)
+	return runDbarenactlBin(t, fakeBenchctlBin, env, stdin, args...)
+}
+
+// runDbarenactlBin is runDbarenactl with an explicit --benchctl-bin, for
+// scenarios (e.g. a missing/unusable binary) that need something other than
+// the fake.
+func runDbarenactlBin(t *testing.T, benchctlBin string, env map[string]string, stdin string, args ...string) runResult {
+	t.Helper()
+	args = append(args, "--benchctl-bin="+benchctlBin)
 	cmd := exec.Command(dbarenactlBin, args...)
 	cmd.Env = os.Environ()
 	for k, v := range env {

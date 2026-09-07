@@ -158,6 +158,20 @@ func New(binPath string) *Client {
 	return &Client{BinPath: binPath}
 }
 
+// CheckAvailable verifies binPath can be executed, without actually invoking
+// benchctl -- used as a fast preflight check before doing other work (e.g.
+// creating a sweep) that would otherwise have to be unwound the moment the
+// first real invocation hits the same problem.
+func CheckAvailable(binPath string) error {
+	if binPath == "" {
+		binPath = "benchctl"
+	}
+	if _, err := exec.LookPath(binPath); err != nil {
+		return fmt.Errorf("%w: %v", ErrBenchctlUnusable, err)
+	}
+	return nil
+}
+
 func (c *Client) LaunchAsync(ctx context.Context, runID, scenarioPath string, set map[string]string) error {
 	args := []string{"run", "--async", "--run-id", runID, scenarioPath}
 	for _, k := range sortedKeys(set) {

@@ -349,6 +349,15 @@ func TestRestartSweep_ClearsAllProgressButKeepsTestPointRows(t *testing.T) {
 	if err := st.RecordError("sweep-1", "budget_exhausted", exhausted.ID, "test point exhausted"); err != nil {
 		t.Fatal(err)
 	}
+	if err := st.SkipTestPoint("sweep-1", exhausted.ID); err != nil {
+		t.Fatalf("SkipTestPoint: %v", err)
+	}
+	// SkipTestPoint un-stops the sweep as a side effect; re-stop it so
+	// RestartSweep's own precondition (status stopped_error) is met, exactly
+	// as a real recovery flow would after a test point re-exhausts.
+	if err := st.RecordError("sweep-1", "budget_exhausted", exhausted.ID, "test point exhausted"); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := st.RestartSweep("sweep-1"); err != nil {
 		t.Fatalf("RestartSweep: %v", err)
@@ -373,6 +382,9 @@ func TestRestartSweep_ClearsAllProgressButKeepsTestPointRows(t *testing.T) {
 		if tp.SuccessesCount != 0 || tp.FailuresCount != 0 {
 			t.Errorf("tp %s after restart = %+v, want zeroed counters", tp.ID, tp)
 		}
+		if tp.Skipped {
+			t.Errorf("tp %s after restart = %+v, want Skipped cleared (start fresh redoes everything)", tp.ID, tp)
+		}
 	}
 
 	if _, err := st.GetRun(exhausted.ID + "-success-0"); !errors.Is(err, ErrNotFound) {
@@ -394,6 +406,137 @@ func TestRestartSweep_RejectsNonStoppedSweep(t *testing.T) {
 func TestRestartSweep_NotFound(t *testing.T) {
 	st := openTestStore(t)
 	if err := st.RestartSweep("nope"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestSkipTestPoint_SetsFlagOnlyOnTargetAndUnstopsSweep(t *testing.T) {
+	st := openTestStore(t)
+	seedSweep(t, st, "sweep-1")
+	exhausted := seedTestPoint(t, st, "sweep-1", "sweep-1-exhausted", 5, 2)
+	finalizeN(t, st, exhausted, "success", 2)
+	finalizeN(t, st, exhausted, "failure", 2) // 2/5 successes, 2/2 failures -> exhausted
+
+	other := seedTestPoint(t, st, "sweep-1", "sweep-1-other", 3, 3)
+	finalizeN(t, st, other, "failure", 1)
+
+	if err := st.RecordError("sweep-1", "budget_exhausted", exhausted.ID, "test point exhausted"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := st.SkipTestPoint("sweep-1", exhausted.ID); err != nil {
+		t.Fatalf("SkipTestPoint: %v", err)
+	}
+
+	sw, err := st.GetSweep("sweep-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sw.Status != SweepRunning || sw.HasError() {
+		t.Errorf("sweep after skip = %+v", sw)
+	}
+
+	got, err := st.GetTestPoint(exhausted.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Skipped {
+		t.Errorf("skipped test point = %+v, want Skipped=true", got)
+	}
+	if got.SuccessesCount != 2 || got.FailuresCount != 2 {
+		t.Errorf("skip should leave existing counters untouched, got %+v", got)
+	}
+
+	gotOther, err := st.GetTestPoint(other.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotOther.Skipped {
+		t.Errorf("other test point should be untouched, got %+v", gotOther)
+	}
+}
+
+func TestSkipTestPoint_RejectsNonStoppedSweep(t *testing.T) {
+	st := openTestStore(t)
+	seedSweep(t, st, "sweep-1")
+	tp := seedTestPoint(t, st, "sweep-1", "sweep-1-tp", 1, 1)
+	if err := st.SkipTestPoint("sweep-1", tp.ID); err == nil {
+		t.Error("SkipTestPoint on a running sweep should have errored")
+	}
+}
+
+func TestSkipTestPoint_NotFound(t *testing.T) {
+	st := openTestStore(t)
+	if err := st.SkipTestPoint("nope", "nope-tp"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestFinalizeRun_SkippedTestPointCountersFrozen(t *testing.T) {
+	st := openTestStore(t)
+	seedSweep(t, st, "sweep-1")
+	tp := seedTestPoint(t, st, "sweep-1", "sweep-1-flaky", 3, 3)
+	finalizeN(t, st, tp, "failure", 3) // exhausts the budget: 0/3 successes, 3/3 failures
+
+	if err := st.RecordError("sweep-1", "budget_exhausted", tp.ID, "test point exhausted"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SkipTestPoint("sweep-1", tp.ID); err != nil {
+		t.Fatalf("SkipTestPoint: %v", err)
+	}
+
+	// A straggler run created before the skip decision (e.g. a second
+	// concurrent attempt) can still finalize afterward -- its environment
+	// still needs tearing down, which is what calls FinalizeRun, but the
+	// now-skipped test point's counters must not move.
+	straggler := &Run{RunID: tp.ID + "-straggler", TestPointID: tp.ID, IterationAttempt: 4}
+	if err := st.CreateRun(straggler); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.FinalizeRun(straggler.RunID, "failure"); err != nil {
+		t.Fatalf("FinalizeRun: %v", err)
+	}
+
+	got, err := st.GetTestPoint(tp.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.FailuresCount != 3 {
+		t.Errorf("FailuresCount = %d, want 3 (frozen at skip time, not bumped by a post-skip straggler)", got.FailuresCount)
+	}
+	if !got.Skipped {
+		t.Errorf("test point should still be skipped, got %+v", got)
+	}
+
+	run, err := st.GetRun(straggler.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != RunFailed {
+		t.Errorf("straggler run status = %q, want failed (still reconciled/torn down despite the frozen counter)", run.Status)
+	}
+}
+
+func TestUpdateParamsJSON_RoundTrips(t *testing.T) {
+	st := openTestStore(t)
+	seedSweep(t, st, "sweep-1")
+
+	if err := st.UpdateParamsJSON("sweep-1", `{"max_concurrency":8}`); err != nil {
+		t.Fatalf("UpdateParamsJSON: %v", err)
+	}
+
+	sw, err := st.GetSweep("sweep-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sw.ParamsJSON != `{"max_concurrency":8}` {
+		t.Errorf("ParamsJSON = %q, want the updated blob", sw.ParamsJSON)
+	}
+}
+
+func TestUpdateParamsJSON_NotFound(t *testing.T) {
+	st := openTestStore(t)
+	if err := st.UpdateParamsJSON("nope", "{}"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
 	}
 }

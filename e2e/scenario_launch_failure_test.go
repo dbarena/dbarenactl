@@ -37,7 +37,7 @@ func TestLaunchFailure_StopsImmediately(t *testing.T) {
 		t.Fatalf("dbarenactl run: exit code 0, want nonzero (launch should fail)\nstdout:\n%s", res.Stdout)
 	}
 
-	sweepID := sweepIDFor(t, manifestPath, "launch-failure", maxConcurrency, iterations, 0)
+	sweepID := sweepIDFor(t, manifestPath, "launch-failure", iterations, 0)
 	store := openStore(t, env.dbHome)
 
 	sweep, err := store.GetSweep(sweepID)

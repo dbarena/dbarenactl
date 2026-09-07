@@ -1,0 +1,14 @@
+#!/bin/sh
+# Wrapper installed on PATH by `source scripts/use.sh`. Rebuilds this
+# checkout's dbarenactl before every invocation, then execs it — so a plain
+# `dbarenactl` from any directory always reflects the current source,
+# including uncommitted changes. Self-locates its own checkout root from
+# $0 rather than CWD or an env var, so it works correctly from git
+# worktrees too.
+set -eu
+
+root="$(cd "$(dirname "$0")/../.." && pwd)"
+
+(cd "$root" && mise run build) >&2
+
+exec "$root/dbarenactl" "$@"

@@ -191,6 +191,19 @@ mise run build-darwin  # darwin/amd64 + darwin/arm64 → ./bin/
 mise run build-all     # all four platforms → ./bin/
 ```
 
+### Use this checkout from anywhere
+
+```bash
+source scripts/use.sh   # or: . scripts/use.sh
+```
+
+- **Ensure to *source* the script, not execute it.**
+- It only affects your *current* shell session. To persist it across shell
+  sessions, add it to your shell's rc file.
+- After sourcing, `dbarenactl` resolves to a wrapper that rebuilds this
+  checkout before every invocation, so it always reflects current source,
+  including uncommitted changes.
+
 ## Further reading
 
 - [Troubleshooting guide](docs/troubleshooting.md)

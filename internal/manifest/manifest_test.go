@@ -323,6 +323,7 @@ func TestPricingFetcherKey_IgnoresPlan(t *testing.T) {
 		{"gcp/cloudsql (Enterprise)", "provider: GCP\nproduct: Cloud SQL for Postgres\nplan: Enterprise", "gcp/cloudsql"},
 		{"gcp/cloudsql (Enterprise Plus)", "provider: GCP\nproduct: Cloud SQL for Postgres\nplan: Enterprise Plus", "gcp/cloudsql"},
 		{"supabase", "provider: Supabase\nproduct: Supabase\nplan: Pro", "supabase"},
+		{"supabase (OrioleDB)", "provider: Supabase\nproduct: OrioleDB\nplan: Pro", "supabase"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -344,30 +345,50 @@ func TestValidate_RejectsUnknownProvider(t *testing.T) {
 	}
 }
 
-func TestValidate_RejectsMismatchedProduct(t *testing.T) {
+func TestValidate_RequiresProduct(t *testing.T) {
+	_, err := parse([]byte(baseYAML("provider: AWS\nproduct: \"\"")))
+	if err == nil || !strings.Contains(err.Error(), "product is required") {
+		t.Fatalf("expected a missing-product error, got: %v", err)
+	}
+}
+
+func TestValidate_AcceptsArbitraryProduct(t *testing.T) {
+	// A product dbarenactl has never seen before (e.g. a future AWS Aurora
+	// candidate) must validate with no code change -- Product is free-form,
+	// only required to be non-empty.
 	_, err := parse([]byte(baseYAML("provider: AWS\nproduct: Aurora")))
-	if err == nil || !strings.Contains(err.Error(), `requires product "RDS"`) {
-		t.Fatalf("expected a product-mismatch error, got: %v", err)
+	if err != nil {
+		t.Fatalf("expected an unregistered product to be accepted, got: %v", err)
+	}
+}
+
+func TestValidate_SupabaseAcceptsOrioleDBProduct(t *testing.T) {
+	_, err := parse([]byte(baseYAML("provider: Supabase\nproduct: OrioleDB\nplan: Pro")))
+	if err != nil {
+		t.Fatalf("expected OrioleDB to be a valid Supabase product, got: %v", err)
 	}
 }
 
 func TestValidate_GCPRequiresPlan(t *testing.T) {
 	_, err := parse([]byte(baseYAML("provider: GCP\nproduct: Cloud SQL for Postgres")))
-	if err == nil || !strings.Contains(err.Error(), "requires plan to be one of") {
+	if err == nil || !strings.Contains(err.Error(), "requires a plan") {
 		t.Fatalf("expected a missing-plan error, got: %v", err)
 	}
 }
 
-func TestValidate_GCPRejectsUnknownPlan(t *testing.T) {
+func TestValidate_GCPAcceptsArbitraryPlan(t *testing.T) {
+	// A plan edition dbarenactl has never seen before must validate with no
+	// code change -- Plan is free-form for providers that have one, only
+	// required to be non-empty.
 	_, err := parse([]byte(baseYAML("provider: GCP\nproduct: Cloud SQL for Postgres\nplan: Standard")))
-	if err == nil || !strings.Contains(err.Error(), "requires plan to be one of") {
-		t.Fatalf("expected an unknown-plan error, got: %v", err)
+	if err != nil {
+		t.Fatalf("expected an unregistered plan to be accepted, got: %v", err)
 	}
 }
 
-func TestValidate_SupabaseRequiresPlanPro(t *testing.T) {
+func TestValidate_SupabaseRequiresPlan(t *testing.T) {
 	_, err := parse([]byte(baseYAML("provider: Supabase\nproduct: Supabase")))
-	if err == nil || !strings.Contains(err.Error(), "requires plan to be one of") {
+	if err == nil || !strings.Contains(err.Error(), "requires a plan") {
 		t.Fatalf("expected a missing-plan error, got: %v", err)
 	}
 }

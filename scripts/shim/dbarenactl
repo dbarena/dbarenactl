@@ -1,14 +1,50 @@
 #!/bin/sh
 # Wrapper installed on PATH by `source scripts/use.sh`. Rebuilds this
-# checkout's dbarenactl before every invocation, then execs it — so a plain
-# `dbarenactl` from any directory always reflects the current source,
-# including uncommitted changes. Self-locates its own checkout root from
-# $0 rather than CWD or an env var, so it works correctly from git
-# worktrees too.
+# checkout's dbarenactl when the checkout has changed since the last build,
+# then execs it — so a plain `dbarenactl` from any directory always reflects
+# the current source, including uncommitted changes. Self-locates its own
+# checkout root from $0 rather than CWD or an env var, so it works correctly
+# from git worktrees too.
 set -eu
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
+bin="$root/dbarenactl"
 
-(cd "$root" && mise run build) >&2
+# True if $bin is missing or older than anything that feeds the build
+# (mirrors `build`'s dependency on the Go sources plus go.mod/go.sum and the
+# mise task definitions themselves).
+is_stale() {
+  [ -f "$bin" ] || return 0
+  find "$root/cmd" "$root/internal" "$root/go.mod" "$root/go.sum" "$root/mise.toml" \
+    -type f -newer "$bin" -print -quit 2>/dev/null | grep -q .
+}
 
-exec "$root/dbarenactl" "$@"
+if is_stale; then
+  lockdir="$root/.build.lock"
+
+  # Serialize the rebuild across concurrent shim invocations: go build's
+  # output binary isn't safe for concurrent use. mkdir is atomic on both
+  # macOS and Linux, so it doubles as a lock.
+  while ! mkdir "$lockdir" 2>/dev/null; do
+    holder="$(cat "$lockdir/pid" 2>/dev/null || true)"
+    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+      # Previous holder died (e.g. Ctrl-C mid-build); clear the stale lock.
+      rm -rf "$lockdir"
+      continue
+    fi
+    sleep 0.1
+  done
+  echo $$ >"$lockdir/pid"
+  trap 'rm -rf "$lockdir"' EXIT
+
+  # Re-check under the lock: another invocation may have just rebuilt while
+  # we were waiting.
+  if is_stale; then
+    (cd "$root" && mise run build) >&2
+  fi
+
+  rm -rf "$lockdir"
+  trap - EXIT
+fi
+
+exec "$bin" "$@"

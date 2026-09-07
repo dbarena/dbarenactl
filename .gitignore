@@ -2,6 +2,9 @@
 /fakebenchctl
 /bin/
 
+# Lock dir used by scripts/shim/dbarenactl to serialize concurrent rebuilds
+/.build.lock
+
 # macOS
 .DS_Store
 

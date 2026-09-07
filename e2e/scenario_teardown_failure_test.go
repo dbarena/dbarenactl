@@ -42,7 +42,7 @@ func TestTeardownFailure_StopsWithEnvironmentFateUnclear(t *testing.T) {
 		t.Fatalf("dbarenactl run: exit code 0, want nonzero (teardown should fail)\nstdout:\n%s", res.Stdout)
 	}
 
-	sweepID := sweepIDFor(t, manifestPath, "teardown-failure", maxConcurrency, iterations, 0)
+	sweepID := sweepIDFor(t, manifestPath, "teardown-failure", iterations, 0)
 	store := openStore(t, env.dbHome)
 
 	sweep, err := store.GetSweep(sweepID)

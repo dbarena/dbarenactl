@@ -38,7 +38,7 @@ func TestFetchFailure_ExhaustsRetriesThenStops(t *testing.T) {
 		t.Fatalf("dbarenactl run: exit code 0, want nonzero (fetch should exhaust its retries)\nstdout:\n%s", res.Stdout)
 	}
 
-	sweepID := sweepIDFor(t, manifestPath, "fetch-failure", maxConcurrency, iterations, 0)
+	sweepID := sweepIDFor(t, manifestPath, "fetch-failure", iterations, 0)
 	store := openStore(t, env.dbHome)
 
 	sweep, err := store.GetSweep(sweepID)

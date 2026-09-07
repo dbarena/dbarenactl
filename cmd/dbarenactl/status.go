@@ -94,7 +94,11 @@ func printTestPointTable(w io.Writer, testPoints []*sweepstate.TestPoint) error 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "  TEST POINT\tSUCCESSES\tFAILURES")
 	for _, tp := range testPoints {
-		fmt.Fprintf(tw, "  %s\t%d/%d\t%d/%d\n", testPointLabel(tp), tp.SuccessesCount, tp.SuccessesNeeded, tp.FailuresCount, tp.FailureBudget)
+		failures := fmt.Sprintf("%d/%d", tp.FailuresCount, tp.FailureBudget)
+		if tp.Skipped {
+			failures += " (skipped)"
+		}
+		fmt.Fprintf(tw, "  %s\t%d/%d\t%s\n", testPointLabel(tp), tp.SuccessesCount, tp.SuccessesNeeded, failures)
 	}
 	return tw.Flush()
 }

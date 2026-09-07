@@ -33,7 +33,6 @@ type Params struct {
 	// distinguishable, not just hash-different.
 	Workload            string
 	ManifestContent     []byte
-	MaxConcurrency      int
 	Iterations          int
 	OnWorkloadFailure   string
 	MaxWorkloadFailures int
@@ -75,7 +74,6 @@ func Compute(p Params) string {
 	fmt.Fprintf(h, "product=%s\n", p.Product)
 	fmt.Fprintf(h, "plan=%s\n", p.Plan)
 	fmt.Fprintf(h, "workload=%s\n", p.Workload)
-	fmt.Fprintf(h, "max_concurrency=%d\n", p.MaxConcurrency)
 	fmt.Fprintf(h, "iterations=%d\n", p.Iterations)
 	fmt.Fprintf(h, "on_workload_failure=%s\n", p.OnWorkloadFailure)
 	fmt.Fprintf(h, "max_workload_failures=%d\n", p.MaxWorkloadFailures)

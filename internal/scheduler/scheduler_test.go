@@ -559,6 +559,161 @@ func TestStep_FailureBudgetExhausted_StopsTheWorldAndStaysExhausted(t *testing.T
 	}
 }
 
+// TestStep_SkippedTestPointExcludedFromSchedulingAndCompletion reproduces
+// `dbarenactl resume`'s skip recovery choice at the scheduler level: a test
+// point manually marked Skipped (via sweepstate.Store.SkipTestPoint) must
+// never be launched again and must not block the sweep from completing once
+// every other test point is satisfied.
+func TestStep_SkippedTestPointExcludedFromSchedulingAndCompletion(t *testing.T) {
+	s, fb, st := newTestScheduler(t)
+	sw := &sweepstate.Sweep{ID: "sweep-1", Provider: "AWS", ParamsJSON: "{}", CreatedAt: time.Now().UTC()}
+	if err := st.CreateSweep(sw); err != nil {
+		t.Fatal(err)
+	}
+	skipped := &sweepstate.TestPoint{
+		ID: "sweep-1-skipped", SweepID: sw.ID, Tier: "small", Workload: "tpcc", Scenario: "x.yaml",
+		BoundType: "io", SuccessesNeeded: 5, FailureBudget: 1,
+	}
+	other := &sweepstate.TestPoint{
+		ID: "sweep-1-other", SweepID: sw.ID, Tier: "medium", Workload: "tpcc", Scenario: "y.yaml",
+		BoundType: "io", SuccessesNeeded: 1, FailureBudget: 1,
+	}
+	if err := st.CreateTestPoints([]*sweepstate.TestPoint{skipped, other}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.RecordError(sw.ID, ActionBudgetExhausted, skipped.ID, "test point exhausted"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SkipTestPoint(sw.ID, skipped.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := defaultOpts()
+	ctx := context.Background()
+
+	if _, err := s.Step(ctx, sw.ID, opts); err != nil {
+		t.Fatal(err)
+	}
+	if len(fb.launchCalls) != 1 {
+		t.Fatalf("launchCalls = %d, want exactly 1 (the skipped test point must never be launched)", len(fb.launchCalls))
+	}
+	runID := fb.launchCalls[0]
+	completeRun(fb.run(runID), true)
+	if _, err := s.Step(ctx, sw.ID, opts); err != nil { // -> needs_results_pull
+		t.Fatal(err)
+	}
+	if _, err := s.Step(ctx, sw.ID, opts); err != nil { // -> needs_teardown
+		t.Fatal(err)
+	}
+	result, err := s.Step(ctx, sw.ID, opts) // teardown + finalize -> sweep complete
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Done {
+		t.Errorf("sweep should complete once every non-skipped test point is satisfied, result = %+v", result)
+	}
+
+	sweepAfter, err := st.GetSweep(sw.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sweepAfter.Status != sweepstate.SweepCompleted {
+		t.Errorf("sweep status = %q, want completed", sweepAfter.Status)
+	}
+}
+
+// TestStep_SkippedTestPointStragglerKeepsSweepOpenUntilTornDown reproduces a
+// real race: a test point can have more than one concurrent attempt in
+// flight, so the very attempt that pushes it over its failure budget (making
+// it eligible to skip) can leave a second, still-executing attempt for that
+// same test point genuinely non-terminal. Marking the sweep complete while
+// that straggler is still up would orphan its environment for good -- once a
+// sweep is SweepCompleted, nothing ever calls Step for it again. Step must
+// keep the sweep open until the straggler finishes reconciling (and is torn
+// down) before ever declaring it done.
+func TestStep_SkippedTestPointStragglerKeepsSweepOpenUntilTornDown(t *testing.T) {
+	s, fb, st := newTestScheduler(t)
+	sw, flaky := seedSweepWithOneTestPoint(t, st, 2, 1) // 2 successes needed, only 1 failure tolerated
+	opts := defaultOpts()
+	ctx := context.Background()
+
+	// Pass 1: spare capacity launches two concurrent attempts for the one
+	// test point (remaining successes needed caps it at exactly 2).
+	if _, err := s.Step(ctx, sw.ID, opts); err != nil {
+		t.Fatal(err)
+	}
+	if len(fb.launchCalls) != 2 {
+		t.Fatalf("launchCalls = %v, want 2 concurrent attempts", fb.launchCalls)
+	}
+	failing, straggler := fb.launchCalls[0], fb.launchCalls[1]
+
+	// Fail the first attempt and walk it all the way through reconciliation
+	// -- waiting_remote -> needs_results_pull -> needs_teardown -> torn down
+	// + finalized -- which is what actually exhausts the budget. The second
+	// attempt is never completed here: it stays a genuine straggler
+	// throughout.
+	completeRun(fb.run(failing), false)
+	if _, err := s.Step(ctx, sw.ID, opts); err != nil { // -> needs_results_pull
+		t.Fatal(err)
+	}
+	if _, err := s.Step(ctx, sw.ID, opts); err != nil { // -> needs_teardown
+		t.Fatal(err)
+	}
+	_, err := s.Step(ctx, sw.ID, opts) // teardown + finalize -> budget exhausted
+	if err == nil || !strings.Contains(err.Error(), "exhausted its failure budget") {
+		t.Fatalf("err = %v", err)
+	}
+
+	if err := st.SkipTestPoint(sw.ID, flaky.ID); err != nil {
+		t.Fatalf("SkipTestPoint: %v", err)
+	}
+
+	// The straggler is still non-terminal (never completed) -- the sweep
+	// must not be marked done yet, even though its only test point is now
+	// skipped and therefore vacuously "allSatisfied".
+	result, err := s.Step(ctx, sw.ID, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Done {
+		t.Fatal("sweep marked Done while the skipped test point's straggler run is still non-terminal")
+	}
+	sweepMidway, err := st.GetSweep(sw.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sweepMidway.Status == sweepstate.SweepCompleted {
+		t.Fatal("sweep marked completed while the straggler is still up -- its environment would never be torn down again")
+	}
+
+	// Now let the straggler actually finish and walk it through the same
+	// reconciliation chain.
+	completeRun(fb.run(straggler), true)
+	if _, err := s.Step(ctx, sw.ID, opts); err != nil { // -> needs_results_pull
+		t.Fatal(err)
+	}
+	if _, err := s.Step(ctx, sw.ID, opts); err != nil { // -> needs_teardown
+		t.Fatal(err)
+	}
+	result, err = s.Step(ctx, sw.ID, opts) // teardown + finalize -> now truly done
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Done {
+		t.Fatalf("result = %+v, want Done once the straggler is torn down", result)
+	}
+	if len(fb.teardownCalls) != 2 {
+		t.Errorf("teardownCalls = %v, want both attempts torn down", fb.teardownCalls)
+	}
+	sweepAfter, err := st.GetSweep(sw.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sweepAfter.Status != sweepstate.SweepCompleted {
+		t.Errorf("sweep status = %q, want completed", sweepAfter.Status)
+	}
+}
+
 // TestRestartExhaustedSweep_TearsDownStragglerBeforeWiping reproduces a real
 // race: the same Step call that finalizes the run pushing test point A over
 // its failure budget can, in that same call, hand a *different*, still-

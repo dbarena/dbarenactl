@@ -204,7 +204,7 @@ func (s *Scheduler) Step(ctx context.Context, sweepID string, opts Options) (Ste
 	var exhausted *sweepstate.TestPoint
 	launchable := make([]*sweepstate.TestPoint, 0, len(testPoints))
 	for _, tp := range testPoints {
-		if tp.Satisfied() {
+		if tp.Satisfied() || tp.Skipped {
 			continue
 		}
 		allSatisfied = false
@@ -262,7 +262,15 @@ func (s *Scheduler) Step(ctx context.Context, sweepID string, opts Options) (Ste
 		}
 	}
 
-	if allSatisfied {
+	// inFlight reflects any pre-existing non-terminal run, straggler or not:
+	// when allSatisfied is true, launchable is necessarily empty (every test
+	// point is either Satisfied or Skipped), so the launch loop above added
+	// nothing to it. Gating completion on inFlight == 0 stops a sweep from
+	// being marked done while a concurrent attempt for an already-satisfied
+	// or now-skipped test point is still executing -- once a sweep is
+	// SweepCompleted, nothing ever calls Step for it again, which would
+	// otherwise orphan that straggler's environment for good.
+	if allSatisfied && inFlight == 0 {
 		if err := s.Store.MarkCompleted(sweepID); err != nil {
 			return StepResult{}, err
 		}
@@ -273,7 +281,7 @@ func (s *Scheduler) Step(ctx context.Context, sweepID string, opts Options) (Ste
 }
 
 func budgetExhaustedError(sweep *sweepstate.Sweep) error {
-	return fmt.Errorf("%s -- this sweep cannot complete automatically; inspect it and either accept the shortfall, raise the failure budget, or start a new sweep", sweep.ErrorDetail)
+	return fmt.Errorf("test point %s exhausted its failure budget -- see above for next steps, or run `dbarenactl resume %s` to inspect and decide", sweep.ErrorTarget, sweep.ID)
 }
 
 func (s *Scheduler) reconcileRun(ctx context.Context, sweepID string, run *sweepstate.Run, opts Options) (bool, error) {

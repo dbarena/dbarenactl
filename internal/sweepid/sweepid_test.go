@@ -13,7 +13,6 @@ func TestCompute_Deterministic(t *testing.T) {
 		Provider:        "AWS",
 		Product:         "RDS",
 		ManifestContent: []byte("test-points: []\n"),
-		MaxConcurrency:  6,
 		Iterations:      5,
 	}
 	a := Compute(p)
@@ -75,23 +74,21 @@ func TestCompute_DiffersOnAnyParamChange(t *testing.T) {
 		Product:             "RDS",
 		Workload:            "tpcc",
 		ManifestContent:     []byte("a"),
-		MaxConcurrency:      6,
 		Iterations:          5,
 		OnWorkloadFailure:   "retry",
 		MaxWorkloadFailures: 0,
 	}
 	variants := []Params{
 		base,
-		{Provider: "GCP", Product: base.Product, Plan: "Enterprise", Workload: base.Workload, ManifestContent: base.ManifestContent, MaxConcurrency: base.MaxConcurrency, Iterations: base.Iterations, OnWorkloadFailure: base.OnWorkloadFailure},
-		{Provider: base.Provider, Product: base.Product, Plan: base.Plan, Workload: "tpce", ManifestContent: base.ManifestContent, MaxConcurrency: base.MaxConcurrency, Iterations: base.Iterations, OnWorkloadFailure: base.OnWorkloadFailure},
-		{Provider: base.Provider, Product: "Aurora", Workload: base.Workload, ManifestContent: base.ManifestContent, MaxConcurrency: base.MaxConcurrency, Iterations: base.Iterations, OnWorkloadFailure: base.OnWorkloadFailure},
-		{Provider: base.Provider, Product: base.Product, Plan: base.Plan, Workload: base.Workload, ManifestContent: []byte("b"), MaxConcurrency: base.MaxConcurrency, Iterations: base.Iterations, OnWorkloadFailure: base.OnWorkloadFailure},
-		{Provider: base.Provider, Product: base.Product, Plan: base.Plan, Workload: base.Workload, ManifestContent: base.ManifestContent, MaxConcurrency: 3, Iterations: base.Iterations, OnWorkloadFailure: base.OnWorkloadFailure},
-		{Provider: base.Provider, Product: base.Product, Plan: base.Plan, Workload: base.Workload, ManifestContent: base.ManifestContent, MaxConcurrency: base.MaxConcurrency, Iterations: 10, OnWorkloadFailure: base.OnWorkloadFailure},
-		{Provider: base.Provider, Product: base.Product, Plan: base.Plan, Workload: base.Workload, ManifestContent: base.ManifestContent, MaxConcurrency: base.MaxConcurrency, Iterations: base.Iterations, OnWorkloadFailure: "fail-keep"},
-		{Provider: base.Provider, Product: base.Product, Plan: base.Plan, Workload: base.Workload, ManifestContent: base.ManifestContent, MaxConcurrency: base.MaxConcurrency, Iterations: base.Iterations, OnWorkloadFailure: base.OnWorkloadFailure, MaxWorkloadFailures: 2},
-		{Provider: base.Provider, Product: base.Product, Plan: base.Plan, Workload: base.Workload, ManifestContent: base.ManifestContent, MaxConcurrency: base.MaxConcurrency, Iterations: base.Iterations, OnWorkloadFailure: base.OnWorkloadFailure, ManifestParams: map[string]string{"supabase_org_id": "org-a"}},
-		{Provider: base.Provider, Product: base.Product, Plan: base.Plan, Workload: base.Workload, ManifestContent: base.ManifestContent, MaxConcurrency: base.MaxConcurrency, Iterations: base.Iterations, OnWorkloadFailure: base.OnWorkloadFailure, ManifestParams: map[string]string{"supabase_org_id": "org-b"}},
+		{Provider: "GCP", Product: base.Product, Plan: "Enterprise", Workload: base.Workload, ManifestContent: base.ManifestContent, Iterations: base.Iterations, OnWorkloadFailure: base.OnWorkloadFailure},
+		{Provider: base.Provider, Product: base.Product, Plan: base.Plan, Workload: "tpce", ManifestContent: base.ManifestContent, Iterations: base.Iterations, OnWorkloadFailure: base.OnWorkloadFailure},
+		{Provider: base.Provider, Product: "Aurora", Workload: base.Workload, ManifestContent: base.ManifestContent, Iterations: base.Iterations, OnWorkloadFailure: base.OnWorkloadFailure},
+		{Provider: base.Provider, Product: base.Product, Plan: base.Plan, Workload: base.Workload, ManifestContent: []byte("b"), Iterations: base.Iterations, OnWorkloadFailure: base.OnWorkloadFailure},
+		{Provider: base.Provider, Product: base.Product, Plan: base.Plan, Workload: base.Workload, ManifestContent: base.ManifestContent, Iterations: 10, OnWorkloadFailure: base.OnWorkloadFailure},
+		{Provider: base.Provider, Product: base.Product, Plan: base.Plan, Workload: base.Workload, ManifestContent: base.ManifestContent, Iterations: base.Iterations, OnWorkloadFailure: "fail-keep"},
+		{Provider: base.Provider, Product: base.Product, Plan: base.Plan, Workload: base.Workload, ManifestContent: base.ManifestContent, Iterations: base.Iterations, OnWorkloadFailure: base.OnWorkloadFailure, MaxWorkloadFailures: 2},
+		{Provider: base.Provider, Product: base.Product, Plan: base.Plan, Workload: base.Workload, ManifestContent: base.ManifestContent, Iterations: base.Iterations, OnWorkloadFailure: base.OnWorkloadFailure, ManifestParams: map[string]string{"supabase_org_id": "org-a"}},
+		{Provider: base.Provider, Product: base.Product, Plan: base.Plan, Workload: base.Workload, ManifestContent: base.ManifestContent, Iterations: base.Iterations, OnWorkloadFailure: base.OnWorkloadFailure, ManifestParams: map[string]string{"supabase_org_id": "org-b"}},
 	}
 
 	seen := map[string]bool{}
@@ -121,7 +118,7 @@ func TestCompute_ManifestParamsOrderIndependent(t *testing.T) {
 func TestCompute_UnscopedHashUnaffectedByTestPointScopeField(t *testing.T) {
 	p := Params{
 		Provider: "Supabase", Product: "Supabase", Plan: "Pro", Workload: "tpcc",
-		ManifestContent: []byte("provider: Supabase\n"), MaxConcurrency: 8, Iterations: 3,
+		ManifestContent: []byte("provider: Supabase\n"), Iterations: 3,
 		OnWorkloadFailure: "retry", MaxWorkloadFailures: 0,
 	}
 	got := Compute(p)
@@ -131,7 +128,6 @@ func TestCompute_UnscopedHashUnaffectedByTestPointScopeField(t *testing.T) {
 	fmt.Fprintf(h, "product=%s\n", p.Product)
 	fmt.Fprintf(h, "plan=%s\n", p.Plan)
 	fmt.Fprintf(h, "workload=%s\n", p.Workload)
-	fmt.Fprintf(h, "max_concurrency=%d\n", p.MaxConcurrency)
 	fmt.Fprintf(h, "iterations=%d\n", p.Iterations)
 	fmt.Fprintf(h, "on_workload_failure=%s\n", p.OnWorkloadFailure)
 	fmt.Fprintf(h, "max_workload_failures=%d\n", p.MaxWorkloadFailures)

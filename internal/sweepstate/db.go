@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS test_points (
 	successes_needed  INTEGER NOT NULL,
 	successes_count   INTEGER NOT NULL DEFAULT 0,
 	failures_count    INTEGER NOT NULL DEFAULT 0,
-	failure_budget    INTEGER NOT NULL
+	failure_budget    INTEGER NOT NULL,
+	skipped           INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_test_points_sweep ON test_points(sweep_id);
 
@@ -89,7 +90,48 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("sweepstate: create schema: %w", err)
 	}
+	if err := addSkippedColumnIfMissing(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
+}
+
+// addSkippedColumnIfMissing retrofits test_points.skipped onto a database
+// created before that column existed. CREATE TABLE IF NOT EXISTS (see
+// schema above) only takes effect for brand-new databases, so an existing
+// on-disk database needs this explicit, idempotent migration every time it's
+// opened.
+func addSkippedColumnIfMissing(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(test_points)`)
+	if err != nil {
+		return fmt.Errorf("sweepstate: inspect test_points schema: %w", err)
+	}
+	defer rows.Close()
+
+	hasSkipped := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notNull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
+			return fmt.Errorf("sweepstate: inspect test_points schema: %w", err)
+		}
+		if name == "skipped" {
+			hasSkipped = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("sweepstate: inspect test_points schema: %w", err)
+	}
+	if hasSkipped {
+		return nil
+	}
+	if _, err := db.Exec(`ALTER TABLE test_points ADD COLUMN skipped INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("sweepstate: add test_points.skipped column: %w", err)
+	}
+	return nil
 }
 
 // Close closes the underlying database connection.

@@ -229,6 +229,58 @@ func (s *Store) ExtendExhaustedTestPoints(sweepID string) error {
 	return tx.Commit()
 }
 
+// SkipTestPoint permanently excludes one specific test point from the sweep
+// going forward -- the scheduler will neither retry it nor let it block the
+// sweep from completing -- and un-stops the sweep, exactly like
+// ExtendExhaustedTestPoints does, except targeted at a single test point
+// rather than every currently-exhausted one. Existing successes/failures on
+// the test point are left untouched, only its Skipped flag is set. A later
+// RestartSweep clears this flag along with everything else, since "start
+// fresh" means redoing the whole sweep, including this test point.
+func (s *Store) SkipTestPoint(sweepID, testPointID string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("sweepstate: begin skip test point %s for sweep %s: %w", testPointID, sweepID, err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	var status string
+	if err := tx.QueryRow(`SELECT status FROM sweeps WHERE id = ?`, sweepID).Scan(&status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("sweepstate: skip test point %s for sweep %s: %w", testPointID, sweepID, err)
+	}
+	if status != string(SweepStoppedError) {
+		return fmt.Errorf("sweepstate: skip test point %s for sweep %s: not stopped (status=%s)", testPointID, sweepID, status)
+	}
+
+	if res, err := tx.Exec(`UPDATE test_points SET skipped = 1 WHERE id = ? AND sweep_id = ?`, testPointID, sweepID); err != nil {
+		return fmt.Errorf("sweepstate: skip test point %s for sweep %s: %w", testPointID, sweepID, err)
+	} else if err := checkOneRowAffected(res, "test point", testPointID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
+		`UPDATE sweeps SET status = ?, error_action = '', error_target = '', error_detail = '', error_at = NULL WHERE id = ?`,
+		string(SweepRunning), sweepID,
+	); err != nil {
+		return fmt.Errorf("sweepstate: skip test point %s for sweep %s: clear error: %w", testPointID, sweepID, err)
+	}
+	return tx.Commit()
+}
+
+// UpdateParamsJSON overwrites a sweep's stored parameter blob. Used only to
+// persist a runtime override -- e.g. `dbarenactl resume --max-concurrency`
+// -- that the CLI deliberately treats as mutable, unlike the rest of a
+// sweep's identity (see internal/sweepid).
+func (s *Store) UpdateParamsJSON(sweepID, paramsJSON string) error {
+	res, err := s.db.Exec(`UPDATE sweeps SET params_json = ? WHERE id = ?`, paramsJSON, sweepID)
+	if err != nil {
+		return fmt.Errorf("sweepstate: update params for sweep %s: %w", sweepID, err)
+	}
+	return checkOneRowAffected(res, "sweep", sweepID)
+}
+
 // RestartSweep discards every test point's progress in the sweep -- not
 // just the one that exhausted its budget -- and un-stops it, so it redoes
 // everything from scratch under the same id. Definitional test point
@@ -258,7 +310,7 @@ func (s *Store) RestartSweep(sweepID string) error {
 	if _, err := tx.Exec(`DELETE FROM runs WHERE test_point_id IN (SELECT id FROM test_points WHERE sweep_id = ?)`, sweepID); err != nil {
 		return fmt.Errorf("sweepstate: restart sweep %s: delete runs: %w", sweepID, err)
 	}
-	if _, err := tx.Exec(`UPDATE test_points SET successes_count = 0, failures_count = 0 WHERE sweep_id = ?`, sweepID); err != nil {
+	if _, err := tx.Exec(`UPDATE test_points SET successes_count = 0, failures_count = 0, skipped = 0 WHERE sweep_id = ?`, sweepID); err != nil {
 		return fmt.Errorf("sweepstate: restart sweep %s: reset test points: %w", sweepID, err)
 	}
 	if _, err := tx.Exec(
@@ -306,7 +358,7 @@ func (s *Store) CreateTestPoints(tps []*TestPoint) error {
 func (s *Store) ListTestPoints(sweepID string) ([]*TestPoint, error) {
 	rows, err := s.db.Query(
 		`SELECT id, sweep_id, tier, workload, scenario, bound_type, variant, set_json,
-		        successes_needed, successes_count, failures_count, failure_budget
+		        successes_needed, successes_count, failures_count, failure_budget, skipped
 		 FROM test_points WHERE sweep_id = ? ORDER BY id`, sweepID,
 	)
 	if err != nil {
@@ -329,7 +381,7 @@ func (s *Store) ListTestPoints(sweepID string) ([]*TestPoint, error) {
 func (s *Store) GetTestPoint(id string) (*TestPoint, error) {
 	row := s.db.QueryRow(
 		`SELECT id, sweep_id, tier, workload, scenario, bound_type, variant, set_json,
-		        successes_needed, successes_count, failures_count, failure_budget
+		        successes_needed, successes_count, failures_count, failure_budget, skipped
 		 FROM test_points WHERE id = ?`, id,
 	)
 	tp, err := scanTestPoint(row)
@@ -342,10 +394,12 @@ func (s *Store) GetTestPoint(id string) (*TestPoint, error) {
 func scanTestPoint(r rowScanner) (*TestPoint, error) {
 	var tp TestPoint
 	var setJSON string
+	var skipped int
 	if err := r.Scan(&tp.ID, &tp.SweepID, &tp.Tier, &tp.Workload, &tp.Scenario, &tp.BoundType, &tp.Variant, &setJSON,
-		&tp.SuccessesNeeded, &tp.SuccessesCount, &tp.FailuresCount, &tp.FailureBudget); err != nil {
+		&tp.SuccessesNeeded, &tp.SuccessesCount, &tp.FailuresCount, &tp.FailureBudget, &skipped); err != nil {
 		return nil, fmt.Errorf("sweepstate: scan test point: %w", err)
 	}
+	tp.Skipped = skipped != 0
 	if err := json.Unmarshal([]byte(setJSON), &tp.Set); err != nil {
 		return nil, fmt.Errorf("sweepstate: unmarshal set for %s: %w", tp.ID, err)
 	}
@@ -516,9 +570,20 @@ func (s *Store) IncrementFetchAttempts(runID string) (int, error) {
 }
 
 // FinalizeRun marks a run terminal (done or failed, per outcome) and, in the
-// same transaction, increments its test point's matching counter. This is
-// the one place SuccessesCount/FailuresCount change, so a crash can never
-// leave a run terminal without its counter bumped or vice versa.
+// same transaction, increments its test point's matching counter -- unless
+// the test point is already Skipped, in which case the counter is left
+// alone. This is the one place SuccessesCount/FailuresCount change, so a
+// crash can never leave a run terminal without its counter bumped or vice
+// versa.
+//
+// A test point can have more than one concurrent attempt in flight, so a
+// straggler run can still be non-terminal (and in need of teardown) at the
+// moment its test point gets skipped. That straggler must still be
+// reconciled to terminal -- its environment still needs to come down -- but
+// its eventual outcome no longer means anything once the test point has
+// been given up on, and counting it would otherwise let
+// successes/failures drift past what the user actually saw when they made
+// the skip decision (e.g. failures ending up above the failure budget).
 func (s *Store) FinalizeRun(runID, outcome string) error {
 	if outcome != "success" && outcome != "failure" {
 		return fmt.Errorf("sweepstate: finalize run %s: invalid outcome %q", runID, outcome)
@@ -536,6 +601,10 @@ func (s *Store) FinalizeRun(runID, outcome string) error {
 		}
 		return fmt.Errorf("sweepstate: finalize run %s: %w", runID, err)
 	}
+	var skipped int
+	if err := tx.QueryRow(`SELECT skipped FROM test_points WHERE id = ?`, testPointID).Scan(&skipped); err != nil {
+		return fmt.Errorf("sweepstate: finalize run %s: read test point %s: %w", runID, testPointID, err)
+	}
 
 	finalStatus := RunDone
 	counterColumn := "successes_count"
@@ -549,10 +618,13 @@ func (s *Store) FinalizeRun(runID, outcome string) error {
 		string(finalStatus), outcome, now, runID); err != nil {
 		return fmt.Errorf("sweepstate: finalize run %s: %w", runID, err)
 	}
-	// counterColumn is one of two fixed, non-user-controlled literals above,
-	// not user input -- safe to interpolate into the statement text.
-	if _, err := tx.Exec(`UPDATE test_points SET `+counterColumn+` = `+counterColumn+` + 1 WHERE id = ?`, testPointID); err != nil {
-		return fmt.Errorf("sweepstate: increment %s for test point %s: %w", counterColumn, testPointID, err)
+	if skipped == 0 {
+		// counterColumn is one of two fixed, non-user-controlled literals
+		// above, not user input -- safe to interpolate into the statement
+		// text.
+		if _, err := tx.Exec(`UPDATE test_points SET `+counterColumn+` = `+counterColumn+` + 1 WHERE id = ?`, testPointID); err != nil {
+			return fmt.Errorf("sweepstate: increment %s for test point %s: %w", counterColumn, testPointID, err)
+		}
 	}
 	return tx.Commit()
 }

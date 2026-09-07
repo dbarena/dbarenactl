@@ -200,8 +200,10 @@ func writeManifest(t *testing.T, workload string, points []testPointSpec) string
 // sweepIDFor recomputes the sweep id `dbarenactl run` would derive for
 // manifestPath under these flags, exactly as cmd/dbarenactl/run.go does --
 // letting tests find their sweep's rows without scraping CLI output.
-// Provider/Product are fixed to AWS/RDS, matching writeManifest's fixed combo.
-func sweepIDFor(t *testing.T, manifestPath, workload string, maxConcurrency, iterations, maxWorkloadFailures int) string {
+// Provider/Product are fixed to AWS/RDS, matching writeManifest's fixed
+// combo. Concurrency isn't part of a sweep's identity (see internal/sweepid),
+// so it's not a parameter here either.
+func sweepIDFor(t *testing.T, manifestPath, workload string, iterations, maxWorkloadFailures int) string {
 	t.Helper()
 	content, err := os.ReadFile(manifestPath)
 	if err != nil {
@@ -212,7 +214,6 @@ func sweepIDFor(t *testing.T, manifestPath, workload string, maxConcurrency, ite
 		Product:             "RDS",
 		Workload:            workload,
 		ManifestContent:     content,
-		MaxConcurrency:      maxConcurrency,
 		Iterations:          iterations,
 		OnWorkloadFailure:   "retry",
 		MaxWorkloadFailures: maxWorkloadFailures,

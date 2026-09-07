@@ -36,7 +36,7 @@ func TestKnownGood_MultipleTestPointsAllSucceed(t *testing.T) {
 		t.Fatalf("dbarenactl run: exit code %d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
 
-	sweepID := sweepIDFor(t, manifestPath, "known-good", maxConcurrency, iterations, 0)
+	sweepID := sweepIDFor(t, manifestPath, "known-good", iterations, 0)
 	store := openStore(t, env.dbHome)
 
 	sweep, err := store.GetSweep(sweepID)

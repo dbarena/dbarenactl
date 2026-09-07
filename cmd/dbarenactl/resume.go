@@ -17,7 +17,10 @@ import (
 	"github.com/dbarena/dbarenactl/internal/sweepstate"
 )
 
-var resumeBenchctlBin string
+var (
+	resumeBenchctlBin    string
+	resumeMaxConcurrency int
+)
 
 var resumeCmd = &cobra.Command{
 	Use:   "resume [sweep-id]",
@@ -28,6 +31,8 @@ var resumeCmd = &cobra.Command{
 
 func init() {
 	resumeCmd.Flags().StringVar(&resumeBenchctlBin, "benchctl-bin", "benchctl", "Path to the benchctl binary")
+	resumeCmd.Flags().IntVar(&resumeMaxConcurrency, "max-concurrency", 0,
+		"Override this sweep's concurrency, persisted for future resumes too (0 = keep the current value)")
 }
 
 func runResume(cmd *cobra.Command, args []string) error {
@@ -62,24 +67,31 @@ func runResume(cmd *cobra.Command, args []string) error {
 		printResumeNotice(sweep)
 	}
 
-	return executeSweep(cmd.Context(), store, sweepID, resumeBenchctlBin)
+	return executeSweep(cmd.Context(), store, sweepID, resumeBenchctlBin, resumeMaxConcurrency)
 }
 
 // recoverBudgetExhausted presents the sweep's exact per-test-point state
 // (which have results, which are missing/exhausted) and asks the user,
-// interactively, whether to continue -- keeping every existing result and
-// giving the exhausted test point(s) a fresh failure allowance for
-// whatever successes they still need -- or to discard the whole sweep's
-// progress and start over. Either way, `run`/`executeSweep`'s own
-// reconciliation loop picks up normally once this returns; this only
-// un-stops the sweep and adjusts its recorded state.
+// interactively, in two stages: first whether to continue (keeping every
+// existing result) or discard the whole sweep's progress and start over;
+// then, only if continuing, whether to give the specific exhausted test
+// point a fresh failure allowance and keep retrying it, or skip it
+// permanently and let the rest of the sweep finish without it. Either way,
+// `run`/`executeSweep`'s own reconciliation loop picks up normally once this
+// returns; this only un-stops the sweep and adjusts its recorded state.
 func recoverBudgetExhausted(cmd *cobra.Command, store *sweepstate.Store, sweep *sweepstate.Sweep, benchctlBin string) error {
 	testPoints, err := store.ListTestPoints(sweep.ID)
 	if err != nil {
 		return err
 	}
+	exhaustedTP, err := store.GetTestPoint(sweep.ErrorTarget)
+	if err != nil {
+		return err
+	}
 
-	fmt.Fprintf(os.Stderr, "Sweep %s stopped: test point %s exhausted its failure budget:\n  %s\n\n", sweep.ID, sweep.ErrorTarget, sweep.ErrorDetail)
+	if err := printBudgetExhaustedDiagnostic(os.Stderr, store, sweep.ID, exhaustedTP); err != nil {
+		return err
+	}
 	fmt.Fprintln(os.Stderr, "Current state:")
 	if err := printTestPointTable(os.Stderr, testPoints); err != nil {
 		return err
@@ -89,6 +101,14 @@ func recoverBudgetExhausted(cmd *cobra.Command, store *sweepstate.Store, sweep *
 	choice, err := promptContinueOrRestart(cmd.InOrStdin(), os.Stderr, sweep.ID)
 	if err != nil {
 		return err
+	}
+
+	var retryOrSkip retryOrSkipChoice
+	if choice == recoveryContinue {
+		retryOrSkip, err = promptRetryOrSkip(cmd.InOrStdin(), os.Stderr, exhaustedTP)
+		if err != nil {
+			return err
+		}
 	}
 
 	lockFilePath, err := lockPath(sweep.ID)
@@ -106,10 +126,19 @@ func recoverBudgetExhausted(cmd *cobra.Command, store *sweepstate.Store, sweep *
 
 	switch choice {
 	case recoveryContinue:
-		if err := store.ExtendExhaustedTestPoints(sweep.ID); err != nil {
-			return err
+		switch retryOrSkip {
+		case choiceRetry:
+			if err := store.ExtendExhaustedTestPoints(sweep.ID); err != nil {
+				return err
+			}
+			fmt.Fprintln(os.Stderr, "Continuing.")
+		case choiceSkip:
+			if err := store.SkipTestPoint(sweep.ID, exhaustedTP.ID); err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "Skipped test point %s. To run a new sweep for just this test point use `--test-point %s`.\n",
+				exhaustedTP.ID, testPointLabel(exhaustedTP))
 		}
-		fmt.Fprintln(os.Stderr, "Continuing -- existing results kept; the exhausted test point(s) get a fresh failure allowance for whatever successes they still need.")
 	case recoveryRestart:
 		logDir, err := logsBaseDir(sweep.ID)
 		if err != nil {
@@ -121,7 +150,7 @@ func recoverBudgetExhausted(cmd *cobra.Command, store *sweepstate.Store, sweep *
 		if err := sched.RestartExhaustedSweep(cmd.Context(), sweep.ID); err != nil {
 			return err
 		}
-		msg := "Starting fresh -- every test point's progress discarded, redoing the whole sweep"
+		msg := "Discarding every test point's progress and starting fresh"
 		if dir, err := artifactBaseDir(sweep.ID); err == nil {
 			msg += fmt.Sprintf(" (prior result files untouched on disk under %s)", dir)
 		}
@@ -143,7 +172,7 @@ const (
 func promptContinueOrRestart(in io.Reader, out io.Writer, sweepID string) (recoveryChoice, error) {
 	scanner := bufio.NewScanner(in)
 	for attempt := 0; attempt < 3; attempt++ {
-		fmt.Fprint(out, "Continue with existing results and extend the budget [c], or discard all progress and start fresh [f]? ")
+		fmt.Fprint(out, "Continue with existing results [c], or discard all progress and start fresh [f]? ")
 		if !scanner.Scan() {
 			return 0, fmt.Errorf("no input received -- re-run `dbarenactl resume %s` from an interactive terminal to decide", sweepID)
 		}
@@ -154,6 +183,46 @@ func promptContinueOrRestart(in io.Reader, out io.Writer, sweepID string) (recov
 			return recoveryRestart, nil
 		}
 		fmt.Fprintln(out, "please answer 'c' or 'f'")
+	}
+	return 0, fmt.Errorf("no valid answer after 3 attempts")
+}
+
+type retryOrSkipChoice int
+
+const (
+	choiceRetry retryOrSkipChoice = iota
+	choiceSkip
+)
+
+// promptRetryOrSkip asks the user, only after they've chosen to continue a
+// budget-exhausted sweep, what to do about the one test point that actually
+// exhausted its budget: keep retrying it with a fresh failure allowance, or
+// give up on it permanently and let the rest of the sweep finish without it.
+// The prompt itself names the exact `--test-point` value to reuse later, so
+// skipping is visibly not a dead end.
+//
+// Unlike promptContinueOrRestart, no input at all (as opposed to a typed but
+// invalid answer) doesn't error: it defaults to retrying, the conservative,
+// non-destructive choice, and the exact behavior a script that only ever
+// answered the old single continue/fresh prompt already relied on -- it
+// shouldn't start failing on a question it doesn't know exists.
+func promptRetryOrSkip(in io.Reader, out io.Writer, tp *sweepstate.TestPoint) (retryOrSkipChoice, error) {
+	scanner := bufio.NewScanner(in)
+	label := testPointLabel(tp)
+	for attempt := 0; attempt < 3; attempt++ {
+		fmt.Fprintf(out, "Keep retrying from %s [r], or skip it [s]? You can start a new sweep later for just this test point with `--test-point %s`. ",
+			tp.ID, label)
+		if !scanner.Scan() {
+			fmt.Fprintf(out, "\nNo further input -- keeping %s and extending its failure budget. Run `dbarenactl resume %s` again from an interactive terminal to skip it instead.\n", tp.ID, tp.SweepID)
+			return choiceRetry, nil
+		}
+		switch strings.ToLower(strings.TrimSpace(scanner.Text())) {
+		case "r", "retry":
+			return choiceRetry, nil
+		case "s", "skip":
+			return choiceSkip, nil
+		}
+		fmt.Fprintln(out, "please answer 'r' or 's'")
 	}
 	return 0, fmt.Errorf("no valid answer after 3 attempts")
 }

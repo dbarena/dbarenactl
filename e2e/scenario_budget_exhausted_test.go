@@ -57,7 +57,7 @@ func TestBudgetExhausted_StopsWhileAnotherRunIsInFlight_ThenResumeContinuePicksI
 		t.Fatalf("dbarenactl run: exit code 0, want nonzero (budget should exhaust)\nstdout:\n%s", res.Stdout)
 	}
 
-	sweepID := sweepIDFor(t, manifestPath, "budget-exhausted", maxConcurrency, iterations, maxWorkloadFailures)
+	sweepID := sweepIDFor(t, manifestPath, "budget-exhausted", iterations, maxWorkloadFailures)
 	store := openStore(t, env.dbHome)
 
 	sweep, err := store.GetSweep(sweepID)
@@ -93,7 +93,7 @@ func TestBudgetExhausted_StopsWhileAnotherRunIsInFlight_ThenResumeContinuePicksI
 	// its own before resuming, exactly as done by hand this session.
 	waitForWorkloadCompletion(t, env.stateDir, slowRun.RunID, 10*time.Second)
 
-	resumeRes := runDbarenactl(t, env.vars(), "c\n", "resume", sweepID)
+	resumeRes := runDbarenactl(t, env.vars(), "c\nr\n", "resume", sweepID)
 	if resumeRes.ExitCode == 0 {
 		t.Fatalf("dbarenactl resume: exit code 0, want nonzero (the failing test point re-exhausts immediately)\nstdout:\n%s", resumeRes.Stdout)
 	}

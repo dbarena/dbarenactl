@@ -62,6 +62,12 @@ type TestPoint struct {
 	SuccessesCount  int
 	FailuresCount   int
 	FailureBudget   int
+	// Skipped is a manual, permanent-for-this-sweep override set via
+	// `dbarenactl resume`'s budget-exhausted recovery: the scheduler treats a
+	// skipped test point as excluded from the sweep entirely, so it never
+	// blocks completion and never gets a new attempt. Cleared by a full
+	// RestartSweep, since "start fresh" means redoing everything.
+	Skipped bool
 }
 
 // Satisfied reports whether this test point has reached its required

@@ -40,27 +40,15 @@ func repoRelativePath(absPath string) string {
 	return absPath
 }
 
-// providerSlugs maps internal/manifest's Provider enum to the slug
-// results/index.json and the results directory layout use. Enterprise vs
-// Enterprise Plus (GCP's two Plans) deliberately share one slug -- the
-// distinction shows up in scenario/variant naming instead (see
-// scenarioSlug), not in the provider axis.
-var providerSlugs = map[string]string{
-	"AWS":      "rds",
-	"GCP":      "gcp-cloudsql",
-	"Supabase": "supabase",
-}
-
-func providerSlug(provider string) (string, error) {
-	slug, ok := providerSlugs[provider]
-	if !ok {
-		return "", fmt.Errorf("no provider slug known for %q -- add one to providerSlugs", provider)
-	}
-	return slug, nil
-}
-
 var slugInvalidCharsRe = regexp.MustCompile(`[^a-z0-9]+`)
 
+// slugify mechanically derives a results/index.json-style slug from a
+// free-form name, e.g. a candidate's own provider:/product: string --
+// lowercased, non-alphanumeric runs collapsed to a single hyphen. Used
+// directly (no lookup table) wherever a slug should just track whatever a
+// candidate file declares, with no extra registration step per new value:
+// "AWS" -> "aws", "GCP" -> "gcp", "Cloud SQL for Postgres" ->
+// "cloud-sql-for-postgres".
 func slugify(s string) string {
 	s = strings.ToLower(s)
 	s = slugInvalidCharsRe.ReplaceAllString(s, "-")
@@ -133,6 +121,7 @@ func validateAgainstSchema(sch *jsonschema.Schema, scenario string, data []byte)
 // indexEntry is one results/index.json row.
 type indexEntry struct {
 	Provider string `json:"provider"`
+	Product  string `json:"product"`
 	Workload string `json:"workload"`
 	Scenario string `json:"scenario"`
 	Path     string `json:"path"`
@@ -144,7 +133,7 @@ type indexEntry struct {
 // unrelated run of `results` never perturbs their key order/formatting --
 // only the one entry actually being added or updated changes, keeping any
 // resulting diff minimal and reviewable.
-func updateResultsIndex(destRoot, provider, workload, scenario, relPath string) error {
+func updateResultsIndex(destRoot, provider, product, workload, scenario, relPath string) error {
 	indexPath := filepath.Join(destRoot, "results", "index.json")
 	var raws []json.RawMessage
 	data, err := os.ReadFile(indexPath)
@@ -159,7 +148,7 @@ func updateResultsIndex(destRoot, provider, workload, scenario, relPath string) 
 		return fmt.Errorf("read %s: %w", indexPath, err)
 	}
 
-	updated := indexEntry{Provider: provider, Workload: workload, Scenario: scenario, Path: relPath}
+	updated := indexEntry{Provider: provider, Product: product, Workload: workload, Scenario: scenario, Path: relPath}
 	updatedJSON, err := json.Marshal(updated)
 	if err != nil {
 		return fmt.Errorf("marshal index entry: %w", err)
@@ -171,7 +160,7 @@ func updateResultsIndex(destRoot, provider, workload, scenario, relPath string) 
 		if err := json.Unmarshal(raw, &e); err != nil {
 			return fmt.Errorf("parse entry %d of %s: %w", i, indexPath, err)
 		}
-		if e.Provider == provider && e.Workload == workload && e.Scenario == scenario {
+		if e.Provider == provider && e.Product == product && e.Workload == workload && e.Scenario == scenario {
 			raws[i] = updatedJSON
 			found = true
 			break

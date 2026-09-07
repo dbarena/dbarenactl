@@ -159,17 +159,15 @@ func runResults(_ *cobra.Command, args []string) error {
 			continue
 		}
 
-		provider, err := providerSlug(m.Provider)
-		if err != nil {
-			return err
-		}
+		provider := slugify(m.Provider)
+		product := slugify(m.Product)
 		// Computed before buildResultDoc (not after, as result.json's own
 		// write used to be) so buildResultDoc can write raw-clients-<n>.csv
 		// into it directly, alongside setting the matching iteration's
 		// raw_metrics_file -- doc and CSV need to agree with each other,
 		// and buildResultDoc is the one place that already knows which
 		// iteration was selected.
-		scenarioDir := filepath.Join(dest, "results", provider, m.Workload, scenario)
+		scenarioDir := filepath.Join(dest, "results", provider, product, m.Workload, scenario)
 		if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
 			return fmt.Errorf("dbarenactl results: %s: %w", scenario, err)
 		}
@@ -208,8 +206,8 @@ func runResults(_ *cobra.Command, args []string) error {
 			return fmt.Errorf("dbarenactl results: %s: %w", scenario, err)
 		}
 		if isCheckout {
-			relPath := filepath.Join(provider, m.Workload, scenario, "result.json")
-			if err := updateResultsIndex(dest, provider, m.Workload, scenario, relPath); err != nil {
+			relPath := filepath.Join(provider, product, m.Workload, scenario, "result.json")
+			if err := updateResultsIndex(dest, provider, product, m.Workload, scenario, relPath); err != nil {
 				return fmt.Errorf("dbarenactl results: %s: update index.json: %w", scenario, err)
 			}
 		}
@@ -315,10 +313,7 @@ func buildResultDoc(in resultDocInputs) (*resultDoc, error) {
 		return nil, err
 	}
 
-	provider, err := providerSlug(in.Manifest.Provider)
-	if err != nil {
-		return nil, err
-	}
+	provider := slugify(in.Manifest.Provider)
 	scenario := scenarioSlug(in.TestPoint.BoundType, in.TestPoint.Tier, in.TestPoint.Variant)
 	pi := resolvePricingInputs(in.Def)
 

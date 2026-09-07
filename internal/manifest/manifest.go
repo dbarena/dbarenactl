@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 
@@ -28,49 +27,27 @@ const (
 	ProviderSupabase = "Supabase"
 )
 
-// Product is the managed database product under test. Each Provider has
-// exactly one valid Product today (see validProducts) -- Product is still
-// its own explicit, validated field rather than being derived, so the
-// schema reads self-documenting and a second product under an existing
-// provider (e.g. AWS Aurora) is a data change later, not a code change.
-const (
-	ProductRDS                 = "RDS"
-	ProductCloudSQLForPostgres = "Cloud SQL for Postgres"
-	ProductSupabase            = "Supabase"
-)
-
-// Plan is the product edition/tier, where the product has one. AWS RDS has
-// no plan concept today; GCP Cloud SQL and Supabase always have one.
-const (
-	PlanEnterprise     = "Enterprise"
-	PlanEnterprisePlus = "Enterprise Plus"
-	PlanPro            = "Pro"
-)
-
-// validProducts is the one valid Product for each Provider -- the sole
-// source of truth Product validation checks against.
-var validProducts = map[string]string{
-	ProviderAWS:      ProductRDS,
-	ProviderGCP:      ProductCloudSQLForPostgres,
-	ProviderSupabase: ProductSupabase,
+// providerInfo holds the static, per-Provider facts dbarenactl needs --
+// which pricing fetcher backs it, and whether it has a Plan concept at all.
+// One registry instead of several parallel maps keyed by the same Provider
+// string, so a new provider's related facts land in one place.
+type providerInfo struct {
+	// pricingFetcherKey is the id `dbarenactl pricing fetch` looks up in
+	// internal/pricing.Registry. Not keyed by (Provider, Product) or Plan:
+	// e.g. GCP's Enterprise and Enterprise Plus editions price from the
+	// exact same Cloud SQL Billing Catalog SKUs, and Supabase's two
+	// products (vanilla, OrioleDB) share the same underlying infra/SKUs --
+	// both must resolve to the same Fetcher regardless.
+	pricingFetcherKey string
+	// hasPlan reports whether this provider has a Plan (edition) concept at
+	// all. Plan's specific value is otherwise unconstrained -- see Manifest.
+	hasPlan bool
 }
 
-// validPlans is the set of Plan values each Provider accepts. A Provider
-// absent from this map has no plan concept -- Plan must be empty for it.
-var validPlans = map[string][]string{
-	ProviderGCP:      {PlanEnterprise, PlanEnterprisePlus},
-	ProviderSupabase: {PlanPro},
-}
-
-// pricingFetcherKeys maps Provider (equivalently (Provider, Product), since
-// they're 1:1 today) to the id `dbarenactl pricing fetch` looks up in
-// internal/pricing.Registry. Plan is deliberately excluded: e.g. GCP's
-// Enterprise and Enterprise Plus editions price from the exact same Cloud
-// SQL Billing Catalog SKUs, so both must resolve to the same Fetcher.
-var pricingFetcherKeys = map[string]string{
-	ProviderAWS:      "aws/rds",
-	ProviderGCP:      "gcp/cloudsql",
-	ProviderSupabase: "supabase",
+var providers = map[string]providerInfo{
+	ProviderAWS:      {pricingFetcherKey: "aws/rds", hasPlan: false},
+	ProviderGCP:      {pricingFetcherKey: "gcp/cloudsql", hasPlan: true},
+	ProviderSupabase: {pricingFetcherKey: "supabase", hasPlan: true},
 }
 
 // TestPointDef is one (tier, bound_type, variant) combination to sweep:
@@ -131,12 +108,16 @@ type Manifest struct {
 	// Provider is the cloud/platform this manifest covers: one of
 	// ProviderAWS, ProviderGCP, ProviderSupabase.
 	Provider string `yaml:"provider"`
-	// Product is the managed database product under test -- validated
-	// against validProducts, the one valid value for Provider.
+	// Product is the managed database product under test, e.g. "RDS",
+	// "Cloud SQL for Postgres", "Supabase", "OrioleDB" -- free-form and only
+	// required to be non-empty, so a new product needs no dbarenactl code
+	// change.
 	Product string `yaml:"product"`
-	// Plan is the product edition/tier, where the product has one --
-	// validated against validPlans. Must be empty for a Provider with no
-	// plan concept (AWS today).
+	// Plan is the product edition/tier, where the product has one, e.g.
+	// "Enterprise", "Enterprise Plus", "Pro" -- free-form beyond the
+	// structural check of whether this Provider has a Plan concept at all
+	// (see providerInfo.hasPlan). Must be empty for a Provider with no plan
+	// concept (AWS today).
 	Plan string `yaml:"plan,omitempty"`
 	// Workload is the benchmark workload name, e.g. "tpcc" -- recorded on
 	// every test point and reused when assembling results.
@@ -169,10 +150,10 @@ func (m *Manifest) ResolvedScenarioPath() string {
 }
 
 // PricingFetcherKey returns the provider id `dbarenactl pricing fetch`
-// looks up in internal/pricing.Registry -- Provider+Product only, Plan
-// deliberately ignored (see pricingFetcherKeys' doc comment).
+// looks up in internal/pricing.Registry -- Provider only, Product and Plan
+// deliberately ignored (see providerInfo.pricingFetcherKey's doc comment).
 func (m *Manifest) PricingFetcherKey() string {
-	return pricingFetcherKeys[m.Provider]
+	return providers[m.Provider].pricingFetcherKey
 }
 
 // paramPlaceholderRe matches `{{ params.NAME }}` placeholders in a
@@ -258,16 +239,16 @@ func parse(data []byte) (*Manifest, error) {
 }
 
 func (m *Manifest) validate() error {
-	wantProduct, ok := validProducts[m.Provider]
+	info, ok := providers[m.Provider]
 	if !ok {
 		return fmt.Errorf("provider must be one of %s, %s, %s, got %q", ProviderAWS, ProviderGCP, ProviderSupabase, m.Provider)
 	}
-	if m.Product != wantProduct {
-		return fmt.Errorf("provider %q requires product %q, got %q", m.Provider, wantProduct, m.Product)
+	if m.Product == "" {
+		return fmt.Errorf("product is required")
 	}
-	if allowed, ok := validPlans[m.Provider]; ok {
-		if !slices.Contains(allowed, m.Plan) {
-			return fmt.Errorf("provider %q requires plan to be one of %v, got %q", m.Provider, allowed, m.Plan)
+	if info.hasPlan {
+		if m.Plan == "" {
+			return fmt.Errorf("provider %q requires a plan", m.Provider)
 		}
 	} else if m.Plan != "" {
 		return fmt.Errorf("provider %q does not use a plan -- remove the plan: field (got %q)", m.Provider, m.Plan)

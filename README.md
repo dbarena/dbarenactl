@@ -201,8 +201,8 @@ source scripts/use.sh   # or: . scripts/use.sh
 - It only affects your *current* shell session. To persist it across shell
   sessions, add it to your shell's rc file.
 - After sourcing, `dbarenactl` resolves to a wrapper that rebuilds this
-  checkout before every invocation, so it always reflects current source,
-  including uncommitted changes.
+  checkout whenever the source has changed since the last build, so it
+  always reflects current source, including uncommitted changes.
 
 ## Further reading
 

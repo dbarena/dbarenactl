@@ -231,6 +231,33 @@ func TestStatus_NonExecutableBinary_ReturnsErrBenchctlUnusable(t *testing.T) {
 	}
 }
 
+func TestCheckAvailable_MissingBinary_ReturnsErrBenchctlUnusable(t *testing.T) {
+	err := CheckAvailable(filepath.Join(t.TempDir(), "no-such-benchctl"))
+	if !errors.Is(err, ErrBenchctlUnusable) {
+		t.Errorf("err = %v, want ErrBenchctlUnusable", err)
+	}
+}
+
+func TestCheckAvailable_NonExecutableBinary_ReturnsErrBenchctlUnusable(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "benchctl")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\necho hi\n"), 0o644); err != nil {
+		t.Fatalf("write non-executable benchctl: %v", err)
+	}
+
+	err := CheckAvailable(path)
+	if !errors.Is(err, ErrBenchctlUnusable) {
+		t.Errorf("err = %v, want ErrBenchctlUnusable", err)
+	}
+}
+
+func TestCheckAvailable_ValidBinary_ReturnsNil(t *testing.T) {
+	bin := fakeBenchctl(t, `exit 0`)
+	if err := CheckAvailable(bin); err != nil {
+		t.Errorf("CheckAvailable(%q) = %v, want nil", bin, err)
+	}
+}
+
 func TestStatus_DomainErrorNotMisclassifiedAsUnusable(t *testing.T) {
 	bin := fakeBenchctl(t, `echo 'Error: runstate: supabase load: HTTP 500: internal error' >&2; exit 1`)
 	c := New(bin)

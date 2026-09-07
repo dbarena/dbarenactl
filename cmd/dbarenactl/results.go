@@ -314,6 +314,7 @@ func buildResultDoc(in resultDocInputs) (*resultDoc, error) {
 	}
 
 	provider := slugify(in.Manifest.Provider)
+	product := slugify(in.Manifest.Product)
 	scenario := scenarioSlug(in.TestPoint.BoundType, in.TestPoint.Tier, in.TestPoint.Variant)
 	pi := resolvePricingInputs(in.Def)
 
@@ -332,8 +333,9 @@ func buildResultDoc(in resultDocInputs) (*resultDoc, error) {
 	}
 
 	return &resultDoc{
-		SchemaVersion:   "1.1.0",
+		SchemaVersion:   "1.2.0",
 		Provider:        provider,
+		Product:         product,
 		Workload:        in.Manifest.Workload,
 		Scenario:        scenario,
 		Tier:            strPtr(in.TestPoint.Tier),

@@ -9,6 +9,7 @@ package main
 type resultDoc struct {
 	SchemaVersion   string           `json:"schema_version"`
 	Provider        string           `json:"provider"`
+	Product         string           `json:"product"`
 	Workload        string           `json:"workload"`
 	Scenario        string           `json:"scenario"`
 	Tier            *string          `json:"tier"`

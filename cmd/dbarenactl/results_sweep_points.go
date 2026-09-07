@@ -12,11 +12,13 @@ import (
 // plus the two facts (from pg_version) and the measured time span that only
 // emerge while walking the selected run's records.
 type sweepPointsResult struct {
-	Points        []sweepPointJSON
-	EngineVersion string
-	CPUArch       string
-	MeasuredFrom  time.Time
-	MeasuredTo    time.Time
+	Points          []sweepPointJSON
+	EngineVersion   string
+	CPUArch         string
+	BenchctlVersion string
+	GotpcVersion    string
+	MeasuredFrom    time.Time
+	MeasuredTo      time.Time
 }
 
 // buildSweepPoints builds one sweepPointJSON per concurrency level the
@@ -41,7 +43,7 @@ func buildSweepPoints(scenario string, successful []candidateRun, selected candi
 	}
 
 	for _, concurrency := range threads {
-		point, engineVersion, cpuArch, err := buildSweepPoint(scenario, concurrency, successful, selected, warehouses, scenarioDir)
+		point, engineVersion, cpuArch, benchctlVersion, gotpcVersion, err := buildSweepPoint(scenario, concurrency, successful, selected, warehouses, scenarioDir)
 		if err != nil {
 			return sweepPointsResult{}, err
 		}
@@ -50,6 +52,12 @@ func buildSweepPoints(scenario string, successful []candidateRun, selected candi
 		// earlier level's answer.
 		if engineVersion != "" {
 			result.EngineVersion, result.CPUArch = engineVersion, cpuArch
+		}
+		if benchctlVersion != "" {
+			result.BenchctlVersion = benchctlVersion
+		}
+		if gotpcVersion != "" {
+			result.GotpcVersion = gotpcVersion
 		}
 		result.Points = append(result.Points, point)
 	}
@@ -63,21 +71,22 @@ func buildSweepPoints(scenario string, successful []candidateRun, selected candi
 // selected run's own data, plus the reference listing of every other
 // successful iteration's throughput at this concurrency (see
 // buildIterationEntries).
-func buildSweepPoint(scenario string, concurrency int, successful []candidateRun, selected candidateRun, warehouses *float64, scenarioDir string) (point sweepPointJSON, engineVersion, cpuArch string, err error) {
+func buildSweepPoint(scenario string, concurrency int, successful []candidateRun, selected candidateRun, warehouses *float64, scenarioDir string) (point sweepPointJSON, engineVersion, cpuArch, benchctlVersion, gotpcVersion string, err error) {
 	records := selected.metricsByThreads[concurrency]
 	tpm, err := tpmCAt(records)
 	if err != nil {
-		return point, "", "", fmt.Errorf("%s: concurrency %d: %w", scenario, concurrency, err)
+		return point, "", "", "", "", fmt.Errorf("%s: concurrency %d: %w", scenario, concurrency, err)
 	}
 	p50, p95, p99, err := latencyFor(records, "NEW_ORDER")
 	if err != nil {
-		return point, "", "", fmt.Errorf("%s: concurrency %d: %w", scenario, concurrency, err)
+		return point, "", "", "", "", fmt.Errorf("%s: concurrency %d: %w", scenario, concurrency, err)
 	}
 	txns, errs, err := buildTxnMetrics(records)
 	if err != nil {
-		return point, "", "", fmt.Errorf("%s: concurrency %d: %w", scenario, concurrency, err)
+		return point, "", "", "", "", fmt.Errorf("%s: concurrency %d: %w", scenario, concurrency, err)
 	}
 	engineVersion, cpuArch = pgVersionInfo(records)
+	benchctlVersion, gotpcVersion = toolVersionInfo(records)
 
 	var workloadParams map[string]any
 	if warehouses != nil {
@@ -86,7 +95,7 @@ func buildSweepPoint(scenario string, concurrency int, successful []candidateRun
 
 	iterations, err := buildIterationEntries(scenario, concurrency, successful, selected, scenarioDir)
 	if err != nil {
-		return point, "", "", err
+		return point, "", "", "", "", err
 	}
 
 	point = sweepPointJSON{
@@ -99,7 +108,7 @@ func buildSweepPoint(scenario string, concurrency int, successful []candidateRun
 		},
 		WorkloadMetrics: &workloadMetrics{Transactions: txns, Errors: errs},
 	}
-	return point, engineVersion, cpuArch, nil
+	return point, engineVersion, cpuArch, benchctlVersion, gotpcVersion, nil
 }
 
 // buildIterationEntries lists every successful iteration's throughput at

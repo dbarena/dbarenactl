@@ -329,7 +329,7 @@ func buildResultDoc(in resultDocInputs) (*resultDoc, error) {
 
 	pricingFetcherKey := in.Manifest.PricingFetcherKey()
 	instance := buildInstanceInfo(in.Snapshot, pricingFetcherKey, pi, sp.CPUArch, sp.EngineVersion)
-	repro := buildReproducibility(in.Manifest, in.TestPoint, in.ManifestPath)
+	repro := buildReproducibility(in.Manifest, in.TestPoint, in.ManifestPath, sp.BenchctlVersion, sp.GotpcVersion)
 
 	pricingOut, err := computePricing(in.Snapshot, pricingFetcherKey, pi, in.TestPoint.SweepID, scenario, sp.Points)
 	if err != nil {
@@ -337,7 +337,7 @@ func buildResultDoc(in resultDocInputs) (*resultDoc, error) {
 	}
 
 	return &resultDoc{
-		SchemaVersion:   "1.0.0",
+		SchemaVersion:   "1.1.0",
 		Provider:        provider,
 		Workload:        in.Manifest.Workload,
 		Scenario:        scenario,
@@ -382,7 +382,7 @@ func buildInstanceInfo(snapshot *pricing.Snapshot, pricingFetcherKey string, pi 
 // supabase_org_id) from it, since no --set list is shown at all: every
 // value that would have appeared there (warehouses, disk sizing, ...) is
 // already reported in instance/sweep[].workload_parameters.
-func buildReproducibility(m *manifest.Manifest, tp *sweepstate.TestPoint, manifestPath string) reproducibility {
+func buildReproducibility(m *manifest.Manifest, tp *sweepstate.TestPoint, manifestPath, benchctlVersion, gotpcVersion string) reproducibility {
 	absManifestPath, err := filepath.Abs(manifestPath)
 	if err != nil {
 		absManifestPath = manifestPath
@@ -390,15 +390,15 @@ func buildReproducibility(m *manifest.Manifest, tp *sweepstate.TestPoint, manife
 	testPointKey := manifest.TestPointDef{Tier: tp.Tier, BoundType: tp.BoundType, Variant: tp.Variant}.Key()
 	command := fmt.Sprintf("dbarenactl run --candidate %s --test-point %s", repoRelativePath(absManifestPath), testPointKey)
 	return reproducibility{
-		BenchctlVersion: nil,
-		LoadGenerator:   loadGeneratorInfo{Name: strPtr("https://github.com/supabase/go-tpc/"), Version: nil},
-		ScenarioRepo:    scenarioRepoInfo{URL: nil, Commit: nil},
-		ScenarioPath:    strPtr(repoRelativePath(m.ResolvedScenarioPath())),
-		Command:         strPtr(command),
+		BenchctlVersion:   strPtr(benchctlVersion),
+		DbarenactlVersion: strPtr(version),
+		LoadGenerator:     loadGeneratorInfo{Name: strPtr("https://github.com/supabase/go-tpc/"), Version: strPtr(gotpcVersion)},
+		ScenarioRepo:      scenarioRepoInfo{URL: nil, Commit: nil},
+		ScenarioPath:      strPtr(repoRelativePath(m.ResolvedScenarioPath())),
+		Command:           strPtr(command),
 		Notes: strPtr("command is the dbarenactl invocation that reproduces this exact test point, not a raw " +
 			"benchctl command -- it omits --set overrides, which are already captured in instance/workload_parameters " +
-			"above. benchctl_version, load_generator.version, and scenario_repo are not currently captured by " +
-			"dbarenactl or benchctl."),
+			"above. scenario_repo is not currently captured by dbarenactl or benchctl."),
 	}
 }
 
@@ -445,7 +445,8 @@ func computePricing(snapshot *pricing.Snapshot, pricingFetcherKey string, pi pri
 	pricingOut := &pricingInfo{
 		MonthlyUSD: breakdown.TotalUSD, HoursPerMonth: pricing.HoursPerMonth,
 		PricingModel: "on-demand-list-price",
-		Source:       strPtr(fmt.Sprintf("dbarenactl pricing snapshot %s, fetched %s", snapshot.ID, snapshot.FetchedAt.UTC().Format(time.RFC3339))),
+		Source:       strPtr(fmt.Sprintf("dbarenactl pricing snapshot %s", snapshot.ID)),
+		FetchedAt:    strPtr(snapshot.FetchedAt.UTC().Format(time.RFC3339)),
 	}
 	for i := range points {
 		v := points[i].Summary.Throughput.Value / pricingOut.MonthlyUSD

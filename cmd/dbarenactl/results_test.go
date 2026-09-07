@@ -1,9 +1,15 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/dbarena/dbarenactl/internal/manifest"
+	"github.com/dbarena/dbarenactl/internal/sweepstate"
 )
 
 // TestResolvePricingInputs_ReadsFromPricingBlock is a regression test for the
@@ -103,5 +109,181 @@ func TestResolvePricingInputs_PricingNeverLeaksSetOnlyKeys(t *testing.T) {
 
 	if pi.instanceType != "xlarge" {
 		t.Errorf("instanceType = %q, want %q -- db_instance_type in Set must not be read", pi.instanceType, "xlarge")
+	}
+}
+
+// ---- buildResultDoc + raw-clients CSV, end to end from on-disk artifacts ----
+
+// newOrderMetricRecords builds the metricRecord set one candidate run needs
+// at a given concurrency: just enough for tpmCAt/latencyFor/buildTxnMetrics
+// to succeed without error (only NEW_ORDER is populated -- the other four
+// TPC-C transactions are legitimately absent from some real runs too, and
+// buildTxnMetrics tolerates that already).
+func newOrderMetricRecords(threads string, tpm float64) []metricRecord {
+	return []metricRecord{
+		{FixtureThreads: threads, Name: "tpcc_tpm", Transaction: "NEW_ORDER", Status: "ok", Value: tpm},
+		{FixtureThreads: threads, Name: "tpcc_count", Transaction: "NEW_ORDER", Status: "ok", Value: 1000.0},
+		{FixtureThreads: threads, Name: "tpcc_duration_seconds", Transaction: "NEW_ORDER", Status: "ok", Value: 60.0},
+		{FixtureThreads: threads, Name: "tpcc_latency_ms", Transaction: "NEW_ORDER", Status: "ok", Quantile: "p50", Value: 3.0},
+		{FixtureThreads: threads, Name: "tpcc_latency_ms", Transaction: "NEW_ORDER", Status: "ok", Quantile: "p95", Value: 5.0},
+		{FixtureThreads: threads, Name: "tpcc_latency_ms", Transaction: "NEW_ORDER", Status: "ok", Quantile: "p99", Value: 8.0},
+	}
+}
+
+// newOrderRawSamplesCSV builds a two-tick benchctl raw_samples_*.csv (see
+// go-tpc's --raw-samples-file) whose NEW_ORDER/ok tpm is tpm at every tick.
+func newOrderRawSamplesCSV(tpm float64) string {
+	return fmt.Sprintf(
+		"t_seconds,transaction,status,count,tpm,avg_latency_ms,p50_latency_ms,p90_latency_ms,p95_latency_ms,p99_latency_ms,p99_9_latency_ms,max_latency_ms\n"+
+			"1.0,NEW_ORDER,ok,100,%.1f,3.0,3.0,4.0,5.0,8.0,10.0,12.0\n"+
+			"2.0,NEW_ORDER,ok,100,%.1f,3.1,3.1,4.1,5.1,8.1,10.1,12.1\n",
+		tpm, tpm)
+}
+
+// makeCandidateRun writes a results_*.json/raw_samples_*.csv fixture pair
+// into its own run directory (mirroring what benchctl fetch actually
+// produces) and loads it back through loadRunMetrics -- exercising the
+// real file-association path, not just hand-built in-memory structs.
+func makeCandidateRun(t *testing.T, dir, runID string, iteration int, threads string, tpm float64) candidateRun {
+	t.Helper()
+	runDir := filepath.Join(dir, runID)
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", runDir, err)
+	}
+
+	records := newOrderMetricRecords(threads, tpm)
+	data, err := json.MarshalIndent(records, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal metric records: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, fmt.Sprintf("results_supabase_%d_%s.json", iteration, threads)), data, 0o644); err != nil {
+		t.Fatalf("write results json: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, fmt.Sprintf("raw_samples_supabase_%d_%s.csv", iteration, threads)), []byte(newOrderRawSamplesCSV(tpm)), 0o644); err != nil {
+		t.Fatalf("write raw samples csv: %v", err)
+	}
+
+	metrics, rawSamples, err := loadRunMetrics(runDir)
+	if err != nil {
+		t.Fatalf("loadRunMetrics(%s): %v", runDir, err)
+	}
+
+	now := time.Now().UTC()
+	return candidateRun{
+		run: &sweepstate.Run{
+			RunID:            runID,
+			IterationAttempt: iteration,
+			Outcome:          "success",
+			LocalArtifactDir: runDir,
+			CreatedAt:        now,
+			UpdatedAt:        now,
+		},
+		metricsByThreads:    metrics,
+		rawSamplesByThreads: rawSamples,
+	}
+}
+
+// TestBuildResultDoc_RawClientsCSV_SelectedIterationOnly is the end-to-end
+// check for the whole feature: three candidate runs at the same
+// concurrency with different NEW_ORDER tpm (1000/1500/2000) go in,
+// selectRepresentativeRun must pick the median (1500), and only that
+// iteration should get a raw-clients-<n>.csv + a non-nil raw_metrics_file
+// -- matching selectRepresentativeRun's "no pooling/intermingling across a
+// test point's independent iterations" policy.
+func TestBuildResultDoc_RawClientsCSV_SelectedIterationOnly(t *testing.T) {
+	dir := t.TempDir()
+	candidates := []candidateRun{
+		makeCandidateRun(t, dir, "run-a", 1, "12", 1000.0),
+		makeCandidateRun(t, dir, "run-b", 2, "12", 1500.0),
+		makeCandidateRun(t, dir, "run-c", 3, "12", 2000.0),
+	}
+
+	m := &manifest.Manifest{Provider: "AWS", Workload: "tpcc"}
+	tp := &sweepstate.TestPoint{Tier: "medium", BoundType: "compute", SweepID: "sweep-1"}
+	def := &manifest.TestPointDef{Tier: "medium", BoundType: "compute", Set: map[string]string{"warehouses": "28"}}
+
+	scenarioDir := filepath.Join(dir, "scenario")
+	if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
+		t.Fatalf("mkdir scenarioDir: %v", err)
+	}
+
+	doc, err := buildResultDoc(resultDocInputs{Manifest: m, TestPoint: tp, Def: def, Successful: candidates, ManifestPath: "candidate.yaml", ScenarioDir: scenarioDir})
+	if err != nil {
+		t.Fatalf("buildResultDoc: %v", err)
+	}
+
+	if len(doc.Sweep) != 1 {
+		t.Fatalf("want 1 sweep point (concurrency 12), got %d", len(doc.Sweep))
+	}
+	sp := doc.Sweep[0]
+	if sp.Concurrency != 12 {
+		t.Fatalf("concurrency = %d, want 12", sp.Concurrency)
+	}
+	if sp.Summary.Throughput.Value != 1500 {
+		t.Errorf("summary throughput = %v, want 1500 (the median)", sp.Summary.Throughput.Value)
+	}
+
+	if len(sp.Iterations) != 3 {
+		t.Fatalf("want 3 iterations, got %d", len(sp.Iterations))
+	}
+	var selectedRawFile *string
+	for _, it := range sp.Iterations {
+		if it.Throughput == 1500 {
+			selectedRawFile = it.RawMetricsFile
+			continue
+		}
+		if it.RawMetricsFile != nil {
+			t.Errorf("non-selected iteration (throughput=%v) has raw_metrics_file = %v, want nil", it.Throughput, *it.RawMetricsFile)
+		}
+	}
+	if selectedRawFile == nil {
+		t.Fatal("selected iteration (throughput=1500) has raw_metrics_file = nil, want set")
+	}
+	if *selectedRawFile != "raw-clients-12.csv" {
+		t.Errorf("selected iteration raw_metrics_file = %q, want %q", *selectedRawFile, "raw-clients-12.csv")
+	}
+
+	csvPath := filepath.Join(scenarioDir, "raw-clients-12.csv")
+	rows := readCSVRows(t, csvPath)
+	if len(rows) != 3 { // header + 2 ticks
+		t.Fatalf("want 3 rows (header+2 ticks), got %d: %v", len(rows), rows)
+	}
+	if rows[1][1] != "1500.0" {
+		t.Errorf("raw-clients-12.csv row[1].new_order_tpm = %q, want %q (run-b's data, not run-a/run-c's)", rows[1][1], "1500.0")
+	}
+}
+
+// TestBuildResultDoc_RawClientsCSV_Idempotent guards against a
+// second run of the same result overwriting or corrupting the CSV
+// differently the second time.
+func TestBuildResultDoc_RawClientsCSV_Idempotent(t *testing.T) {
+	dir := t.TempDir()
+	candidates := []candidateRun{
+		makeCandidateRun(t, dir, "run-a", 1, "12", 1500.0),
+	}
+	m := &manifest.Manifest{Provider: "AWS", Workload: "tpcc"}
+	tp := &sweepstate.TestPoint{Tier: "medium", BoundType: "compute", SweepID: "sweep-1"}
+	def := &manifest.TestPointDef{Tier: "medium", BoundType: "compute", Set: map[string]string{"warehouses": "28"}}
+	scenarioDir := filepath.Join(dir, "scenario")
+	if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
+		t.Fatalf("mkdir scenarioDir: %v", err)
+	}
+
+	if _, err := buildResultDoc(resultDocInputs{Manifest: m, TestPoint: tp, Def: def, Successful: candidates, ManifestPath: "candidate.yaml", ScenarioDir: scenarioDir}); err != nil {
+		t.Fatalf("buildResultDoc (1st): %v", err)
+	}
+	first, err := os.ReadFile(filepath.Join(scenarioDir, "raw-clients-12.csv"))
+	if err != nil {
+		t.Fatalf("read first output: %v", err)
+	}
+	if _, err := buildResultDoc(resultDocInputs{Manifest: m, TestPoint: tp, Def: def, Successful: candidates, ManifestPath: "candidate.yaml", ScenarioDir: scenarioDir}); err != nil {
+		t.Fatalf("buildResultDoc (2nd): %v", err)
+	}
+	second, err := os.ReadFile(filepath.Join(scenarioDir, "raw-clients-12.csv"))
+	if err != nil {
+		t.Fatalf("read second output: %v", err)
+	}
+	if string(first) != string(second) {
+		t.Errorf("output differs between runs:\n1st: %q\n2nd: %q", first, second)
 	}
 }

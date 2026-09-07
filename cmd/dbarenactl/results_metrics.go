@@ -54,38 +54,56 @@ func (m metricRecord) stringValue() (string, error) {
 
 // loadRunMetrics reads and flattens every results_*.json file directly
 // inside artifactDir into one slice, then groups the records by their
-// fixture_threads (i.e. concurrency) value.
-func loadRunMetrics(artifactDir string) (map[int][]metricRecord, error) {
+// fixture_threads (i.e. concurrency) value. It also associates each
+// concurrency with its sibling raw_samples_*.csv path, when one exists --
+// results_<X>.json and raw_samples_<X>.csv are always written by the same
+// benchctl Collect() call with the same naming inputs, so the raw-samples
+// path is derived from the results path found here (see rawSamplesPathFor)
+// rather than independently re-parsed from its own filename.
+func loadRunMetrics(artifactDir string) (map[int][]metricRecord, map[int]string, error) {
 	matches, err := filepath.Glob(filepath.Join(artifactDir, "results_*.json"))
 	if err != nil {
-		return nil, fmt.Errorf("glob %s: %w", artifactDir, err)
+		return nil, nil, fmt.Errorf("glob %s: %w", artifactDir, err)
 	}
 	byThreads := map[int][]metricRecord{}
+	rawSamplesByThreads := map[int]string{}
 	for _, path := range matches {
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", path, err)
+			return nil, nil, fmt.Errorf("read %s: %w", path, err)
 		}
 		var records []metricRecord
 		if err := json.Unmarshal(data, &records); err != nil {
-			return nil, fmt.Errorf("parse %s: %w", path, err)
+			return nil, nil, fmt.Errorf("parse %s: %w", path, err)
 		}
-		for _, r := range records {
-			threads, err := strconv.Atoi(r.FixtureThreads)
+		var threads int
+		for i, r := range records {
+			t, err := strconv.Atoi(r.FixtureThreads)
 			if err != nil {
-				return nil, fmt.Errorf("%s: fixture_threads %q is not an integer: %w", path, r.FixtureThreads, err)
+				return nil, nil, fmt.Errorf("%s: fixture_threads %q is not an integer: %w", path, r.FixtureThreads, err)
 			}
-			byThreads[threads] = append(byThreads[threads], r)
+			if i == 0 {
+				threads = t
+			}
+			byThreads[t] = append(byThreads[t], r)
+		}
+		if len(records) == 0 {
+			continue
+		}
+		rawPath := rawSamplesPathFor(path)
+		if _, err := os.Stat(rawPath); err == nil {
+			rawSamplesByThreads[threads] = rawPath
 		}
 	}
-	return byThreads, nil
+	return byThreads, rawSamplesByThreads, nil
 }
 
 // candidateRun is one successful, artifact-bearing run being considered as
 // the representative iteration for a test point.
 type candidateRun struct {
-	run              *sweepstate.Run
-	metricsByThreads map[int][]metricRecord
+	run                 *sweepstate.Run
+	metricsByThreads    map[int][]metricRecord
+	rawSamplesByThreads map[int]string
 }
 
 // tpmCAt returns the primary-metric (tpmC = NEW_ORDER, status=ok) throughput

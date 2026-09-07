@@ -44,12 +44,13 @@ type scenarioRepoInfo struct {
 }
 
 type reproducibility struct {
-	BenchctlVersion *string           `json:"benchctl_version"`
-	LoadGenerator   loadGeneratorInfo `json:"load_generator"`
-	ScenarioRepo    scenarioRepoInfo  `json:"scenario_repo"`
-	ScenarioPath    *string           `json:"scenario_path"`
-	Command         *string           `json:"command"`
-	Notes           *string           `json:"notes,omitempty"`
+	BenchctlVersion   *string           `json:"benchctl_version"`
+	DbarenactlVersion *string           `json:"dbarenactl_version"`
+	LoadGenerator     loadGeneratorInfo `json:"load_generator"`
+	ScenarioRepo      scenarioRepoInfo  `json:"scenario_repo"`
+	ScenarioPath      *string           `json:"scenario_path"`
+	Command           *string           `json:"command"`
+	Notes             *string           `json:"notes,omitempty"`
 }
 
 type pricingInfo struct {
@@ -57,6 +58,7 @@ type pricingInfo struct {
 	HoursPerMonth float64 `json:"hours_per_month"`
 	PricingModel  string  `json:"pricing_model"`
 	Source        *string `json:"source"`
+	FetchedAt     *string `json:"fetched_at"`
 }
 
 type iterationEntry struct {

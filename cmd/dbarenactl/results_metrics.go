@@ -17,16 +17,18 @@ import (
 // metadata records (pg_version/pg_settings) carry a string, while every
 // other record carries a number.
 type metricRecord struct {
-	Benchmark      string `json:"benchmark"`
-	FixtureThreads string `json:"fixture_threads"`
-	Iteration      int    `json:"iteration"`
-	Name           string `json:"name"`
-	ProjectID      string `json:"project_id"`
-	Service        string `json:"service"`
-	Status         string `json:"status,omitempty"`
-	Transaction    string `json:"transaction,omitempty"`
-	Quantile       string `json:"quantile,omitempty"`
-	Value          any    `json:"value"`
+	Benchmark       string `json:"benchmark"`
+	FixtureThreads  string `json:"fixture_threads"`
+	Iteration       int    `json:"iteration"`
+	Name            string `json:"name"`
+	ProjectID       string `json:"project_id"`
+	Service         string `json:"service"`
+	Status          string `json:"status,omitempty"`
+	Transaction     string `json:"transaction,omitempty"`
+	Quantile        string `json:"quantile,omitempty"`
+	Value           any    `json:"value"`
+	BenchctlVersion string `json:"benchctl_version,omitempty"`
+	GotpcVersion    string `json:"gotpc_version,omitempty"`
 }
 
 func (m metricRecord) floatValue() (float64, error) {
@@ -301,4 +303,20 @@ func pgVersionInfo(records []metricRecord) (version, cpuArch string) {
 		return version, cpuArch
 	}
 	return "", ""
+}
+
+// toolVersionInfo returns (benchctl_version, gotpc_version) from a
+// concurrency level's records, if present. Unlike pg_version, benchctl
+// stamps these onto every record as flat fields (like project_id/service),
+// not as one dedicated metadata row, so any record carrying a value will do.
+func toolVersionInfo(records []metricRecord) (benchctlVersion, gotpcVersion string) {
+	for _, r := range records {
+		if benchctlVersion == "" {
+			benchctlVersion = r.BenchctlVersion
+		}
+		if gotpcVersion == "" {
+			gotpcVersion = r.GotpcVersion
+		}
+	}
+	return benchctlVersion, gotpcVersion
 }

@@ -118,9 +118,12 @@ func TestResolvePricingInputs_PricingNeverLeaksSetOnlyKeys(t *testing.T) {
 // at a given concurrency: just enough for tpmCAt/latencyFor/buildTxnMetrics
 // to succeed without error (only NEW_ORDER is populated -- the other four
 // TPC-C transactions are legitimately absent from some real runs too, and
-// buildTxnMetrics tolerates that already).
-func newOrderMetricRecords(threads string, tpm float64) []metricRecord {
-	return []metricRecord{
+// buildTxnMetrics tolerates that already). benchctlVersion/gotpcVersion are
+// stamped onto every record, mirroring how benchctl's collector labels
+// actually attach them; pass "" for either to simulate a run whose records
+// predate benchctl's version-metadata feature.
+func newOrderMetricRecords(threads string, tpm float64, benchctlVersion, gotpcVersion string) []metricRecord {
+	records := []metricRecord{
 		{FixtureThreads: threads, Name: "tpcc_tpm", Transaction: "NEW_ORDER", Status: "ok", Value: tpm},
 		{FixtureThreads: threads, Name: "tpcc_count", Transaction: "NEW_ORDER", Status: "ok", Value: 1000.0},
 		{FixtureThreads: threads, Name: "tpcc_duration_seconds", Transaction: "NEW_ORDER", Status: "ok", Value: 60.0},
@@ -128,6 +131,11 @@ func newOrderMetricRecords(threads string, tpm float64) []metricRecord {
 		{FixtureThreads: threads, Name: "tpcc_latency_ms", Transaction: "NEW_ORDER", Status: "ok", Quantile: "p95", Value: 5.0},
 		{FixtureThreads: threads, Name: "tpcc_latency_ms", Transaction: "NEW_ORDER", Status: "ok", Quantile: "p99", Value: 8.0},
 	}
+	for i := range records {
+		records[i].BenchctlVersion = benchctlVersion
+		records[i].GotpcVersion = gotpcVersion
+	}
+	return records
 }
 
 // newOrderRawSamplesCSV builds a two-tick benchctl raw_samples_*.csv (see
@@ -144,14 +152,14 @@ func newOrderRawSamplesCSV(tpm float64) string {
 // into its own run directory (mirroring what benchctl fetch actually
 // produces) and loads it back through loadRunMetrics -- exercising the
 // real file-association path, not just hand-built in-memory structs.
-func makeCandidateRun(t *testing.T, dir, runID string, iteration int, threads string, tpm float64) candidateRun {
+func makeCandidateRun(t *testing.T, dir, runID string, iteration int, threads string, tpm float64, benchctlVersion, gotpcVersion string) candidateRun {
 	t.Helper()
 	runDir := filepath.Join(dir, runID)
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		t.Fatalf("mkdir %s: %v", runDir, err)
 	}
 
-	records := newOrderMetricRecords(threads, tpm)
+	records := newOrderMetricRecords(threads, tpm, benchctlVersion, gotpcVersion)
 	data, err := json.MarshalIndent(records, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal metric records: %v", err)
@@ -193,9 +201,9 @@ func makeCandidateRun(t *testing.T, dir, runID string, iteration int, threads st
 func TestBuildResultDoc_RawClientsCSV_SelectedIterationOnly(t *testing.T) {
 	dir := t.TempDir()
 	candidates := []candidateRun{
-		makeCandidateRun(t, dir, "run-a", 1, "12", 1000.0),
-		makeCandidateRun(t, dir, "run-b", 2, "12", 1500.0),
-		makeCandidateRun(t, dir, "run-c", 3, "12", 2000.0),
+		makeCandidateRun(t, dir, "run-a", 1, "12", 1000.0, "1.2.0+20260727-abc1234", "latest-20-geb6de81"),
+		makeCandidateRun(t, dir, "run-b", 2, "12", 1500.0, "1.2.0+20260727-abc1234", "latest-20-geb6de81"),
+		makeCandidateRun(t, dir, "run-c", 3, "12", 2000.0, "1.2.0+20260727-abc1234", "latest-20-geb6de81"),
 	}
 
 	m := &manifest.Manifest{Provider: "AWS", Workload: "tpcc"}
@@ -210,6 +218,16 @@ func TestBuildResultDoc_RawClientsCSV_SelectedIterationOnly(t *testing.T) {
 	doc, err := buildResultDoc(resultDocInputs{Manifest: m, TestPoint: tp, Def: def, Successful: candidates, ManifestPath: "candidate.yaml", ScenarioDir: scenarioDir})
 	if err != nil {
 		t.Fatalf("buildResultDoc: %v", err)
+	}
+
+	if got := doc.Reproducibility.BenchctlVersion; got == nil || *got != "1.2.0+20260727-abc1234" {
+		t.Errorf("reproducibility.benchctl_version = %v, want %q", got, "1.2.0+20260727-abc1234")
+	}
+	if got := doc.Reproducibility.LoadGenerator.Version; got == nil || *got != "latest-20-geb6de81" {
+		t.Errorf("reproducibility.load_generator.version = %v, want %q", got, "latest-20-geb6de81")
+	}
+	if got := doc.Reproducibility.DbarenactlVersion; got == nil || *got != version {
+		t.Errorf("reproducibility.dbarenactl_version = %v, want %q", got, version)
 	}
 
 	if len(doc.Sweep) != 1 {
@@ -259,7 +277,7 @@ func TestBuildResultDoc_RawClientsCSV_SelectedIterationOnly(t *testing.T) {
 func TestBuildResultDoc_RawClientsCSV_Idempotent(t *testing.T) {
 	dir := t.TempDir()
 	candidates := []candidateRun{
-		makeCandidateRun(t, dir, "run-a", 1, "12", 1500.0),
+		makeCandidateRun(t, dir, "run-a", 1, "12", 1500.0, "", ""),
 	}
 	m := &manifest.Manifest{Provider: "AWS", Workload: "tpcc"}
 	tp := &sweepstate.TestPoint{Tier: "medium", BoundType: "compute", SweepID: "sweep-1"}
@@ -269,8 +287,22 @@ func TestBuildResultDoc_RawClientsCSV_Idempotent(t *testing.T) {
 		t.Fatalf("mkdir scenarioDir: %v", err)
 	}
 
-	if _, err := buildResultDoc(resultDocInputs{Manifest: m, TestPoint: tp, Def: def, Successful: candidates, ManifestPath: "candidate.yaml", ScenarioDir: scenarioDir}); err != nil {
+	firstDoc, err := buildResultDoc(resultDocInputs{Manifest: m, TestPoint: tp, Def: def, Successful: candidates, ManifestPath: "candidate.yaml", ScenarioDir: scenarioDir})
+	if err != nil {
 		t.Fatalf("buildResultDoc (1st): %v", err)
+	}
+	// Records with no benchctl_version/gotpc_version (a run predating
+	// benchctl's version-metadata feature) must leave these null, not "".
+	if firstDoc.Reproducibility.BenchctlVersion != nil {
+		t.Errorf("reproducibility.benchctl_version = %v, want nil", *firstDoc.Reproducibility.BenchctlVersion)
+	}
+	if firstDoc.Reproducibility.LoadGenerator.Version != nil {
+		t.Errorf("reproducibility.load_generator.version = %v, want nil", *firstDoc.Reproducibility.LoadGenerator.Version)
+	}
+	// dbarenactl_version always comes from the running binary, regardless
+	// of what the fetched metric records contain.
+	if got := firstDoc.Reproducibility.DbarenactlVersion; got == nil || *got != version {
+		t.Errorf("reproducibility.dbarenactl_version = %v, want %q", got, version)
 	}
 	first, err := os.ReadFile(filepath.Join(scenarioDir, "raw-clients-12.csv"))
 	if err != nil {
@@ -285,5 +317,29 @@ func TestBuildResultDoc_RawClientsCSV_Idempotent(t *testing.T) {
 	}
 	if string(first) != string(second) {
 		t.Errorf("output differs between runs:\n1st: %q\n2nd: %q", first, second)
+	}
+}
+
+// TestToolVersionInfo covers toolVersionInfo's contract: benchctl_version
+// and gotpc_version are read off whichever record carries them first
+// (unlike pg_version, they're stamped onto every record, not one dedicated
+// metadata row), and each is independently "" when absent.
+func TestToolVersionInfo(t *testing.T) {
+	records := newOrderMetricRecords("12", 1500.0, "1.2.0+20260727-abc1234", "latest-20-geb6de81")
+	benchctlVersion, gotpcVersion := toolVersionInfo(records)
+	if benchctlVersion != "1.2.0+20260727-abc1234" {
+		t.Errorf("benchctlVersion = %q, want %q", benchctlVersion, "1.2.0+20260727-abc1234")
+	}
+	if gotpcVersion != "latest-20-geb6de81" {
+		t.Errorf("gotpcVersion = %q, want %q", gotpcVersion, "latest-20-geb6de81")
+	}
+
+	empty := newOrderMetricRecords("12", 1500.0, "", "")
+	benchctlVersion, gotpcVersion = toolVersionInfo(empty)
+	if benchctlVersion != "" {
+		t.Errorf("benchctlVersion = %q, want empty", benchctlVersion)
+	}
+	if gotpcVersion != "" {
+		t.Errorf("gotpcVersion = %q, want empty", gotpcVersion)
 	}
 }

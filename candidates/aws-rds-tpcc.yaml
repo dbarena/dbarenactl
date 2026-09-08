@@ -24,6 +24,12 @@
 # block instead -- a sibling to `set:` that dbarenactl reads for itself but
 # never forwards to benchctl. See docs/disk-sizing-formula-2026-09.md
 # (benchctl repo) for where the disk sizing itself comes from.
+#
+# 2026-09-03/04: xlarge/2xlarge/4xlarge/8xlarge's compute-bound warehouses and disk config were
+# independently re-validated on RDS itself via a cache-hit-ratio calibration sweep
+# (docs/compute-bound-calibration-plan-2026-09.md §10) -- no changes needed, measured demand
+# stayed comfortably within the existing caps at every tier (28-58% of the throughput cap at
+# the confirmed formula's warehouse count).
 provider: AWS
 product: RDS
 workload: tpcc

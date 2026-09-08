@@ -1,0 +1,123 @@
+# Rerun manifest for `dbarenactl run --candidate=candidates/aws-rds-compute-bound-rerun.yaml`.
+#
+# Covers every compute-bound (`bound_type: compute`) test point in
+# aws-rds-tpcc.yaml. All seven tiers' disk config was finalized on 2026-09-02
+# per docs/compute-bound-sizing-formula-2026-09.md -- see that doc's §3 for
+# the cross-provider disk spec table. RDS's disk_size_gb is forced to 400 GB
+# at 2xlarge/4xlarge/8xlarge (not the Supabase/GCP 2xRAM_GiB value) since AWS
+# rejects any custom `iops` below that threshold entirely -- disk_iops is
+# then explicitly dialed down from each tier's natural size_map default to
+# match the Supabase-validated target, while throughput is stuck at the
+# bundled ~500 MiB/s baseline regardless (not independently settable once
+# >=400 GiB) -- an accepted asymmetry, not a bug.
+#
+# small/xlarge/8xlarge already have single-iteration boundary-check runs on
+# Supabase (not RDS) recorded in that doc's evidence log, but the methodology
+# requires 3 successful iterations per test point on each platform (see the
+# Public Benchmarks Methodology page's Execution/Experiment Setup section) --
+# all seven tiers below still need full 3-iteration runs on RDS. medium/large
+# were never independently tested at all on any platform (accepted by
+# inference from xlarge) -- highest priority.
+#
+# 2026-09-03/04 update: xlarge/2xlarge/4xlarge/8xlarge's warehouse counts and disk config below
+# were independently re-validated via a cache-hit-ratio calibration sweep on RDS itself
+# (docs/compute-bound-calibration-plan-2026-09.md §10) -- no numeric changes, all held up
+# comfortably.
+#
+# Supply with `dbarenactl run --candidate=candidates/aws-rds-compute-bound-rerun.yaml`
+provider: AWS
+product: RDS
+workload: tpcc
+region: us-east-1
+scenario_path: ../../benchctl/scenarios/rds-tpcc-tiers.yaml
+test_points:
+  - tier: small
+    bound_type: compute
+    set:
+      project_size: small
+      warehouses: "8"
+      threads: "1,2,4,8,12"
+      instance_type: c8gd.xlarge
+      disk_size_gb: "20"
+      disk_iops: "3000"
+    pricing:
+      db_instance_type: db.t4g.small
+      disk_type: gp3
+  - tier: medium
+    bound_type: compute
+    set:
+      project_size: medium
+      warehouses: "16"
+      threads: "1,2,4,8,12"
+      instance_type: c8gd.xlarge
+      disk_size_gb: "20"
+      disk_iops: "3000"
+    pricing:
+      db_instance_type: db.t4g.medium
+      disk_type: gp3
+  - tier: large
+    bound_type: compute
+    set:
+      project_size: large
+      warehouses: "32"
+      threads: "1,2,4,8,12"
+      instance_type: c8gd.xlarge
+      disk_size_gb: "20"
+      disk_iops: "3000"
+    pricing:
+      db_instance_type: db.m6g.large
+      disk_type: gp3
+  - tier: xlarge
+    bound_type: compute
+    set:
+      project_size: xlarge
+      warehouses: "64"
+      threads: "1,2,4,8,16,24"
+      instance_type: c8gd.xlarge
+      disk_size_gb: "20"
+      disk_iops: "3000"
+    pricing:
+      db_instance_type: db.m6g.xlarge
+      disk_type: gp3
+  - tier: 2xlarge
+    bound_type: compute
+    set:
+      project_size: 2xlarge
+      warehouses: "128"
+      threads: "1,2,4,8,16,32,48"
+      instance_type: c8gd.2xlarge
+      disk_size_gb: "400"
+      disk_iops: "12000"
+    pricing:
+      db_instance_type: db.m6g.2xlarge
+      disk_type: gp3
+      disk_baseline_iops: "12000"
+      disk_baseline_throughput_mibps: "500"
+  - tier: 4xlarge
+    bound_type: compute
+    set:
+      project_size: 4xlarge
+      warehouses: "256"
+      threads: "1,2,4,8,16,32,64,96"
+      instance_type: c8gd.4xlarge
+      disk_size_gb: "400"
+      disk_iops: "12000"
+    pricing:
+      db_instance_type: db.m6g.4xlarge
+      disk_type: gp3
+      disk_baseline_iops: "12000"
+      disk_baseline_throughput_mibps: "500"
+  - tier: 8xlarge
+    bound_type: compute
+    set:
+      project_size: 8xlarge
+      warehouses: "512"
+      threads: "1,2,4,8,16,32,64,128,192"
+      instance_type: c8gd.12xlarge
+      disk_size_gb: "400"
+      disk_iops: "12000"
+    pricing:
+      db_instance_type: db.m6g.8xlarge
+      disk_type: gp3
+      disk_baseline_iops: "12000"
+      disk_baseline_throughput_mibps: "500"

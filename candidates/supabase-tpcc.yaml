@@ -11,6 +11,25 @@
 #
 # instance_type is the load driver's own EC2 instance type (independent of
 # project_size).
+#
+# 2026-09-03/04: xlarge/2xlarge/4xlarge/8xlarge's compute-bound warehouses (and this file's
+# existing disk config for them) were independently re-validated via a cache-hit-ratio
+# calibration sweep (docs/compute-bound-calibration-plan-2026-09.md §9) -- no changes needed,
+# both the formula and the disk numbers already here held up. small stays directly tested;
+# medium/large remain accepted by inference only, out of scope for that round.
+#
+# 2026-09-09 correction (PERFENG-116): that calibration's SQL-only proxy for disk-tightness
+# missed a real pathology -- direct Performance Insights + `pg_stat_wal` measurement on RDS at
+# 8xlarge found compute-bound is actually `LWLock:WALWrite`-latency-bound, not disk-capacity-
+# bound, and only raising disk_iops/disk_throughput_mibps together to the io-bound spec fixes
+# it (see aws-rds-tpcc.yaml's header for the measured numbers). Since the same TPC-C write
+# workload runs unmodified on Supabase, 2xlarge/4xlarge/8xlarge's existing compute-bound rows
+# above are kept as-is but relabeled `variant: cost-optimized`, and a new `performance-optimized`
+# row is added at each of those three tiers, matching the io-bound row's iops/throughput exactly
+# (round numbers: 300/600/1200 MiB/s, aligned with GCP's identical performance-optimized values
+# -- see docs/disk-sizing-formula-2026-09.md and PERFENG-116). xlarge is untouched: no direct
+# evidence exists that its lower thread count (24, vs. 8xlarge's 192) hits the same lock-
+# contention mechanism, so no performance-optimized variant is invented for it.
 provider: Supabase
 product: Supabase
 plan: Pro
@@ -195,6 +214,7 @@ test_points:
   # in that round's 2xlarge run.
   - tier: 2xlarge
     bound_type: compute
+    variant: cost-optimized
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
       project_size: 2xlarge
@@ -202,6 +222,21 @@ test_points:
       disk_size_gb: "64"
       disk_iops: "6000"
       disk_throughput_mibps: "250"
+      threads: "1,2,4,8,16,32,48"
+      instance_type: c8gd.2xlarge
+  # performance-optimized: matches the io-bound row above's iops (12,000); throughput rounded to
+  # 300 (io-bound's own documented-baseline value is 297) and aligned with GCP's identical
+  # performance-optimized config at this tier -- see the 2026-09-09 header comment.
+  - tier: 2xlarge
+    bound_type: compute
+    variant: performance-optimized
+    set:
+      supabase_org_id: "{{ params.supabase_org_id }}"
+      project_size: 2xlarge
+      warehouses: "128"
+      disk_size_gb: "64"
+      disk_iops: "12000"
+      disk_throughput_mibps: "300"
       threads: "1,2,4,8,16,32,48"
       instance_type: c8gd.2xlarge
   # 4xlarge: own tier disk size (512 GB) with disk_iops matched to the
@@ -235,6 +270,7 @@ test_points:
   # config tried.
   - tier: 4xlarge
     bound_type: compute
+    variant: cost-optimized
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
       project_size: 4xlarge
@@ -242,6 +278,21 @@ test_points:
       disk_size_gb: "128"
       disk_iops: "12000"
       disk_throughput_mibps: "500"
+      threads: "1,2,4,8,16,32,64,96"
+      instance_type: c8gd.4xlarge
+  # performance-optimized: matches the io-bound row above's iops/throughput (20,000/600,
+  # rounded down from the io-bound row's own documented 594), aligned with GCP's identical
+  # performance-optimized config at this tier -- see the 2026-09-09 header comment.
+  - tier: 4xlarge
+    bound_type: compute
+    variant: performance-optimized
+    set:
+      supabase_org_id: "{{ params.supabase_org_id }}"
+      project_size: 4xlarge
+      warehouses: "256"
+      disk_size_gb: "128"
+      disk_iops: "20000"
+      disk_throughput_mibps: "600"
       threads: "1,2,4,8,16,32,64,96"
       instance_type: c8gd.4xlarge
   # 8xlarge: own tier disk size (1024 GB) with disk_iops matched to the
@@ -274,6 +325,7 @@ test_points:
   # final for this tier even though disk still runs near 100% util.
   - tier: 8xlarge
     bound_type: compute
+    variant: cost-optimized
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
       project_size: 8xlarge
@@ -281,5 +333,21 @@ test_points:
       disk_size_gb: "256"
       disk_iops: "12000"
       disk_throughput_mibps: "500"
+      threads: "1,2,4,8,16,32,64,128,192"
+      instance_type: c8gd.8xlarge
+  # performance-optimized: matches the io-bound row above's iops/throughput (40,000/1200,
+  # rounded up from the io-bound row's own documented 1188) -- this is the tier where the
+  # underlying pathology was actually measured directly on RDS; see the 2026-09-09 header
+  # comment and PERFENG-116 for the full writeup.
+  - tier: 8xlarge
+    bound_type: compute
+    variant: performance-optimized
+    set:
+      supabase_org_id: "{{ params.supabase_org_id }}"
+      project_size: 8xlarge
+      warehouses: "512"
+      disk_size_gb: "256"
+      disk_iops: "40000"
+      disk_throughput_mibps: "1200"
       threads: "1,2,4,8,16,32,64,128,192"
       instance_type: c8gd.8xlarge

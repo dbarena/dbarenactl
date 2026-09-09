@@ -23,6 +23,25 @@
 # requires them to price each test point, so they now live under each test
 # point's `pricing:` block instead -- a sibling to `set:` that dbarenactl
 # reads for itself but never forwards to benchctl.
+#
+# 2026-09-09 correction (PERFENG-116): the 2026-09-04 correction below (reverting
+# xlarge/2xlarge/4xlarge/8xlarge compute-bound to match their io-bound rows) used a SQL-only
+# proxy for disk-tightness. Direct measurement on RDS (Performance Insights + `pg_stat_wal`,
+# see aws-rds-tpcc.yaml's header) found the real mechanism at 2xlarge/4xlarge/8xlarge is
+# `LWLock:WALWrite` latency under this workload's write concurrency, not disk throughput
+# capacity -- a pathology the 2026-09-04 proxy signal never measured. xlarge has no direct
+# evidence it hits the same mechanism (max 24 threads vs. 8xlarge's 192, where it was actually
+# measured), so its compute-bound row is right-sized back down to the cheap baseline
+# (20 GB/3,000 IOPS/140 MiB/s, GCP's own floor) rather than kept at the untested io-bound-
+# matching values. 2xlarge/4xlarge/8xlarge instead get a genuine `cost-optimized`/
+# `performance-optimized` variant split: `cost-optimized` matches Supabase's own validated
+# cost-optimized config at each tier exactly (64/128/256 GB, 6000/12000/12000 IOPS,
+# 250/500/500 MiB/s); `performance-optimized` matches the io-bound row's IOPS with throughput
+# rounded to the same numbers used on Supabase (300/600/1200 MiB/s, not GCP's own archived
+# 297/594/1188) -- both explicitly aligned cross-provider per docs/disk-sizing-formula-2026-09.md.
+# Disk size for performance-optimized also shrinks to match cost-optimized's footprint
+# (64/128/256 GB, not the io-bound row's much larger 256/512/1024 GB) since GCP has no RDS-style
+# size gate forcing a bigger disk to reach a given IOPS/throughput target -- see PERFENG-116.
 provider: GCP
 product: Cloud SQL for Postgres
 plan: Enterprise
@@ -124,11 +143,22 @@ test_points:
     pricing:
       db_instance_type: db-custom-N4-4-16384
       disk_type: HYPERDISK_BALANCED
-  # 2026-09-02 correction: disk_iops was "6000" -- not required (GCP's floor is 3,000, same as
-  # medium/large), and Supabase's own xlarge compute row is at 3,000 too (§2.2). disk_size_gb
-  # dropped 128->20 and disk_throughput_mibps dropped 149->140 (the plain floor, matching
-  # medium/large) since this tier no longer targets Supabase's XL-specific documented baseline --
-  # see docs/compute-bound-sizing-formula-2026-09.md.
+  # 2026-09-04 correction: disk_size_gb/disk_iops/disk_throughput_mibps were "20"/"3000"/"140".
+  # docs/compute-bound-calibration-plan-2026-09.md §10/§11 calibration found real demand at this
+  # warehouse count already running at 96% of the 140 MiB/s cap on a proxy signal later confirmed
+  # to *understate* real throughput by ~40% (docs/compute-bound-sizing-formula-2026-09.md §5's
+  # iostat cross-check) -- i.e. true demand likely already exceeded the old cap. Bumped to match
+  # this tier's own io-bound row directly above: not a guessed intermediate value, but the exact
+  # spec this calibration round tested across 32/64/128 warehouses (2x/4x/8x the formula) without
+  # ever exceeding ~52% of its throughput cap, so it's evidence-backed headroom, not a guess.
+  #
+  # 2026-09-09 correction (PERFENG-116): reverted back to 20/3000/140. The 2026-09-04 bump above
+  # used a SQL-only proxy that turned out to miss the real mechanism entirely (see the file
+  # header) -- and critically, xlarge's own thread ceiling (24) is 8x lower than 8xlarge's (192),
+  # where the actual `LWLock:WALWrite` pathology was directly measured. There's no evidence this
+  # tier needs anything above the cheap baseline, so it goes back to matching Supabase's/RDS's
+  # single untagged compute-bound row at this tier -- no performance-optimized variant invented
+  # without proof it's needed.
   - tier: xlarge
     bound_type: compute
     set:
@@ -164,8 +194,22 @@ test_points:
   # and validated 6000 IOPS/250 MiB/s on Supabase at this tier (CPU-bound, passed cleanly) -- GCP
   # matches that target directly (no RDS-style 400 GiB gate to work around here).
   # disk_size_gb=64 is 2xRAM_GiB.
+  #
+  # 2026-09-04 correction: reverted back to the io-bound row's 256/12000/297. The
+  # docs/compute-bound-calibration-plan-2026-09.md §10 calibration found this tier's demand at
+  # 84% of the 250 MiB/s cap on the same understating-by-~40% proxy as xlarge above -- same
+  # reasoning, same fix: match the io-bound spec this round already validated safe up to 8x the
+  # formula's warehouse count (256 warehouses tested here without exceeding ~30% of this cap).
+  #
+  # 2026-09-09 correction (PERFENG-116): split into cost-optimized/performance-optimized (see
+  # file header) instead of keeping a single io-bound-matching row. cost-optimized matches
+  # Supabase's own validated config at this tier exactly; performance-optimized matches the
+  # io-bound row's IOPS (12,000) but with disk_size_gb shrunk to cost-optimized's 64 GB (no
+  # RDS-style size gate on GCP) and throughput rounded to 300 (aligned with Supabase, not GCP's
+  # own archived 297).
   - tier: 2xlarge
     bound_type: compute
+    variant: cost-optimized
     set:
       project_size: 2xlarge
       warehouses: "128"
@@ -174,6 +218,20 @@ test_points:
       disk_size_gb: "64"
       disk_iops: "6000"
       disk_throughput_mibps: "250"
+    pricing:
+      db_instance_type: db-custom-N4-8-32768
+      disk_type: HYPERDISK_BALANCED
+  - tier: 2xlarge
+    bound_type: compute
+    variant: performance-optimized
+    set:
+      project_size: 2xlarge
+      warehouses: "128"
+      threads: "1,2,4,8,16,32,48"
+      instance_type: c4a-standard-8
+      disk_size_gb: "64"
+      disk_iops: "12000"
+      disk_throughput_mibps: "300"
     pricing:
       db_instance_type: db-custom-N4-8-32768
       disk_type: HYPERDISK_BALANCED
@@ -197,8 +255,20 @@ test_points:
   # (reused from the io-bound row). docs/compute-bound-sizing-formula-2026-09.md §2.5/§3
   # live-tested and locked in 12000 IOPS/500 MiB/s on Supabase at this tier -- GCP matches
   # directly. disk_size_gb=128 is 2xRAM_GiB.
+  #
+  # 2026-09-04 correction: reverted back to the io-bound row's 512/20000/594 -- same
+  # under-provisioning pattern as xlarge/2xlarge above (measured demand at 74% of the 500 MiB/s
+  # cap on the understating proxy), same fix: this round validated the io-bound spec safe up to
+  # 512 warehouses (8x the formula) without exceeding ~63% of this larger cap.
+  #
+  # 2026-09-09 correction (PERFENG-116): split into cost-optimized/performance-optimized (see
+  # file header). cost-optimized matches Supabase's own validated config at this tier exactly;
+  # performance-optimized matches the io-bound row's IOPS (20,000) but with disk_size_gb shrunk
+  # to cost-optimized's 128 GB and throughput rounded to 600 (aligned with Supabase, not GCP's
+  # own archived 594).
   - tier: 4xlarge
     bound_type: compute
+    variant: cost-optimized
     set:
       project_size: 4xlarge
       warehouses: "256"
@@ -207,6 +277,20 @@ test_points:
       disk_size_gb: "128"
       disk_iops: "12000"
       disk_throughput_mibps: "500"
+    pricing:
+      db_instance_type: db-custom-N4-16-65536
+      disk_type: HYPERDISK_BALANCED
+  - tier: 4xlarge
+    bound_type: compute
+    variant: performance-optimized
+    set:
+      project_size: 4xlarge
+      warehouses: "256"
+      threads: "1,2,4,8,16,32,64,96"
+      instance_type: c4a-standard-16
+      disk_size_gb: "128"
+      disk_iops: "20000"
+      disk_throughput_mibps: "600"
     pricing:
       db_instance_type: db-custom-N4-16-65536
       disk_type: HYPERDISK_BALANCED
@@ -231,8 +315,24 @@ test_points:
   # §2.4 tested 3 configs on Supabase at this tier (A: 3000/125, B: 6000/250, both ruled out; C:
   # 12000/500, best result, locked in) -- GCP matches Config C directly. disk_size_gb=256 is
   # 2xRAM_GiB.
+  #
+  # 2026-09-04 correction: reverted back to the io-bound row's 1024/40000/1188. This tier had the
+  # clearest signal in the whole calibration round: a full 30-minute run (not just the 5-minute
+  # proxy) measured a *sustained* 552 MiB/s combined data+WAL write rate against this row's old
+  # 500 MiB/s cap -- already over, confirmed real, not a short-window fluke (see
+  # docs/compute-bound-calibration-plan-2026-09.md §11). The io-bound spec was validated safe up
+  # to 1024 warehouses (8x the formula) at ~46% of its throughput cap.
+  #
+  # 2026-09-09 correction (PERFENG-116): split into cost-optimized/performance-optimized (see
+  # file header). This is the tier where the underlying `LWLock:WALWrite` pathology was actually
+  # measured directly on RDS (measured tpmC: ~87-93K at 12k/500 cost-optimized vs. ~219-233K at
+  # 40k/1200 performance-optimized). cost-optimized matches Supabase's own validated config at
+  # this tier exactly; performance-optimized matches the io-bound row's IOPS (40,000) but with
+  # disk_size_gb shrunk to cost-optimized's 256 GB and throughput rounded to 1200 (aligned with
+  # Supabase, not GCP's own archived 1188).
   - tier: 8xlarge
     bound_type: compute
+    variant: cost-optimized
     set:
       project_size: 8xlarge
       warehouses: "512"
@@ -241,6 +341,20 @@ test_points:
       disk_size_gb: "256"
       disk_iops: "12000"
       disk_throughput_mibps: "500"
+    pricing:
+      db_instance_type: db-custom-N4-32-131072
+      disk_type: HYPERDISK_BALANCED
+  - tier: 8xlarge
+    bound_type: compute
+    variant: performance-optimized
+    set:
+      project_size: 8xlarge
+      warehouses: "512"
+      threads: "1,2,4,8,16,32,64,128,192"
+      instance_type: c4a-standard-32
+      disk_size_gb: "256"
+      disk_iops: "40000"
+      disk_throughput_mibps: "1200"
     pricing:
       db_instance_type: db-custom-N4-32-131072
       disk_type: HYPERDISK_BALANCED

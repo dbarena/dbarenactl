@@ -207,7 +207,7 @@ func runResults(_ *cobra.Command, args []string) error {
 		}
 		if isCheckout {
 			relPath := filepath.Join(provider, product, m.Workload, scenario, "result.json")
-			if err := updateResultsIndex(dest, provider, product, m.Workload, scenario, relPath); err != nil {
+			if err := updateResultsIndex(dest, provider, product, m.Workload, scenario, tp.Variant, relPath); err != nil {
 				return fmt.Errorf("dbarenactl results: %s: update index.json: %w", scenario, err)
 			}
 		}

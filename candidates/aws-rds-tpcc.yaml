@@ -21,6 +21,28 @@
 # (docs/compute-bound-calibration-plan-2026-09.md §10) -- no changes needed, measured demand
 # stayed comfortably within the existing caps at every tier (28-58% of the throughput cap at
 # the confirmed formula's warehouse count).
+#
+# 2026-09-09 correction (PERFENG-116, see tickets/PERFENG-116/README.md in the daniel.mitterdorfer
+# Documents checkout for the full writeup): the above calibration used a SQL-only proxy for
+# disk-tightness that turned out to understate real demand and never measured the actual wait-
+# event/fsync-latency picture. Direct Performance Insights + `pg_stat_wal` measurement found RDS
+# compute-bound at 2xlarge/4xlarge/8xlarge is not disk-capacity-bound but LATENCY-bound: >90% of
+# active sessions queued on `LWLock:WALWrite` under this workload's write concurrency, at only
+# 12-19% CPU utilization -- a pathology invisible to the cache-hit-ratio signal the 2026-09-03/04
+# round checked. Isolating disk_iops and disk_throughput_mibps independently showed neither alone
+# fixes it (40k IOPS/500 MiB/s: 105,635 tpmC; 12k IOPS/1188 MiB/s: 77,522 tpmC) -- only raising
+# BOTH together to the io-bound spec does (40k/1188: 218,673-233,233 tpmC, vs. 87,409-93,192 at
+# the existing 12k/500 baseline). Rather than pick one number, 2xlarge/4xlarge/8xlarge's compute
+# rows are now split into two named `variant`s: `cost-optimized` (today's existing values,
+# unchanged) and `performance-optimized` (matches the io-bound row's iops/throughput, explicitly
+# aligned with the same values used on Supabase/GCP wherever RDS's 400 GiB custom-IOPS gate
+# doesn't force a difference). xlarge is NOT split -- no direct evidence exists that its lower
+# thread count (max 24, vs. 8xlarge's 192) triggers the same lock-contention mechanism, so
+# inventing an untested "performance-optimized xlarge" variant isn't warranted; it stays a single
+# row at the existing cheap baseline. All db.m9g.* instance classes below were already correct at
+# the time of this correction (an earlier m6g->m9g migration) -- every archived result.json for
+# this provider predates that migration (still shows db.m6g.*/db.t4g.*), so every RDS tier/
+# bound_type needs a fresh run regardless of whether its `set:` values are changing here.
 provider: AWS
 product: RDS
 workload: tpcc
@@ -120,6 +142,7 @@ test_points:
       warehouses: "640"
       disk_size_gb: "400"
       disk_iops: "12000"
+      disk_throughput_mibps: "500"
       threads: "1,2,4,8,16,24"
       instance_type: c8gd.xlarge
     pricing:
@@ -156,6 +179,7 @@ test_points:
       warehouses: "1280"
       disk_size_gb: "400"
       disk_iops: "12000"
+      disk_throughput_mibps: "500"
       threads: "1,2,4,8,16,32,48"
       instance_type: c8gd.2xlarge
     pricing:
@@ -163,18 +187,33 @@ test_points:
       # per https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html — gp3's baseline jumps to 12,000 IOPS/500 MiB/s at >=400 GiB for Postgres
       disk_baseline_iops: "12000"
       disk_baseline_throughput_mibps: "500"
-  # 2026-09-02 correction: disk_iops was "6000" here (Supabase's own validated target at this
-  # tier per docs/compute-bound-sizing-formula-2026-09.md §2.3) -- but on RDS, disk_size_gb must
-  # already be forced to 400 (up from the 2xRAM_GiB value of 64) to unlock any custom iops at
-  # all (AWS rejects it entirely below that threshold, see the io row's comment above), and once
-  # forced there, AWS bundles 12,000 IOPS / 500 MiB/s automatically at zero extra cost over the
-  # storage itself. Deliberately dialing down to 6,000 would only reduce RDS's performance for no
-  # cost savings -- no real deployment would do that. So disk_iops=12000 here: take the free
-  # baseline rather than artificially under-provision. Throughput isn't independently settable
-  # once >=400 GiB (no `disk_throughput_mibps`/`storage_throughput` input exists on this
-  # scenario/module) -- RDS gets the bundled 500 MiB/s baseline automatically, see pricing block.
+  # 2026-09-09 correction (PERFENG-116): this tier's single compute-bound row (previously
+  # disk_size_gb=400/disk_iops=12000, identical to the io-bound row above) was never
+  # independently tested -- it just inherited io-bound's config because RDS's 400 GiB
+  # custom-IOPS gate makes 12,000/500 the "free" outcome once you cross that threshold at all.
+  # Split into two named variants instead: `cost-optimized` takes the genuinely minimal path
+  # (stay below the 400 GiB gate entirely, get gp3's free 3,000 IOPS baseline, matching
+  # Supabase's/GCP's cost-optimized disk_size_gb=64 exactly), and `performance-optimized`
+  # deliberately crosses the gate for the free 12,000/500 bundle -- the same one RDS's io-bound
+  # row already gets, so no extra disk_size_gb cost over cost-optimized's smaller footprint is
+  # avoidable here; the gate is a step function with no way to buy less capacity between 64 and
+  # 400 GiB. Aligns with Supabase/GCP performance-optimized at this tier (also 12,000 IOPS) --
+  # throughput is the one place RDS's 400 GiB gate forces a divergence (bundled 500 MiB/s,
+  # rather than everyone else's 300) since there's no way to request less once >=400 GiB.
   - tier: 2xlarge
     bound_type: compute
+    variant: cost-optimized
+    set:
+      db_instance_class: db.m9g.2xlarge
+      warehouses: "128"
+      threads: "1,2,4,8,16,32,48"
+      instance_type: c8gd.2xlarge
+      disk_size_gb: "64"
+    pricing:
+      disk_type: gp3
+  - tier: 2xlarge
+    bound_type: compute
+    variant: performance-optimized
     set:
       db_instance_class: db.m9g.2xlarge
       warehouses: "128"
@@ -182,6 +221,7 @@ test_points:
       instance_type: c8gd.2xlarge
       disk_size_gb: "400"
       disk_iops: "12000"
+      disk_throughput_mibps: "500"
     pricing:
       disk_type: gp3
       disk_baseline_iops: "12000"
@@ -201,20 +241,23 @@ test_points:
       instance_type: c8gd.4xlarge
       disk_size_gb: "512"
       disk_iops: "20000"
+      disk_throughput_mibps: "600"
     pricing:
       disk_type: gp3
       disk_baseline_iops: "12000"
       disk_baseline_throughput_mibps: "500"
-  # 2026-09-02 correction: disk_size_gb/disk_iops were "512"/"20000" (this tier's own natural
-  # size_map default, reused from the io-bound row). docs/compute-bound-sizing-formula-2026-09.md
-  # §2.5/§3 live-tested and locked in disk_iops=12000/disk_throughput_mibps=500 on Supabase at
-  # this tier (matches the ceiling RDS gets forced into anyway once crossed to >=400 GiB -- see
-  # the 2xlarge comment above for why). disk_size_gb is right-sized down to 400 (the minimum
-  # crossing point) rather than reusing the natural 512 GB default, and disk_iops is dialed down
-  # from the natural 20,000 default to the tested 12,000 target. Throughput isn't independently
-  # settable once >=400 GiB -- bundled at the bottom-doc-cited ~500 MiB/s baseline regardless.
+  # 2026-09-09 correction (PERFENG-116): split into `cost-optimized` (today's existing
+  # 400 GiB/12,000 IOPS/500 MiB/s config, unchanged -- the free bundle once RDS's 400 GiB
+  # custom-IOPS gate is crossed) and `performance-optimized` (matches the io-bound row above:
+  # 20,000 IOPS/600 MiB/s, aligned with Supabase/GCP's identical performance-optimized values at
+  # this tier -- unlike 2xlarge, 600 already exceeds the free 500 baseline so no RDS-specific
+  # divergence applies here). Direct measurement found the disk-capacity-only cost-optimized
+  # config leaves RDS `LWLock:WALWrite`-bound under this workload's write concurrency -- see the
+  # file header and PERFENG-116 for the cross-tier evidence (measured directly at 8xlarge, this
+  # tier's split follows by the same mechanism, not independently re-measured).
   - tier: 4xlarge
     bound_type: compute
+    variant: cost-optimized
     set:
       db_instance_class: db.m9g.4xlarge
       warehouses: "256"
@@ -222,6 +265,22 @@ test_points:
       instance_type: c8gd.4xlarge
       disk_size_gb: "400"
       disk_iops: "12000"
+      disk_throughput_mibps: "500"
+    pricing:
+      disk_type: gp3
+      disk_baseline_iops: "12000"
+      disk_baseline_throughput_mibps: "500"
+  - tier: 4xlarge
+    bound_type: compute
+    variant: performance-optimized
+    set:
+      db_instance_class: db.m9g.4xlarge
+      warehouses: "256"
+      threads: "1,2,4,8,16,32,64,96"
+      instance_type: c8gd.4xlarge
+      disk_size_gb: "400"
+      disk_iops: "20000"
+      disk_throughput_mibps: "600"
     pricing:
       disk_type: gp3
       disk_baseline_iops: "12000"
@@ -241,19 +300,24 @@ test_points:
       instance_type: c8gd.12xlarge
       disk_size_gb: "1024"
       disk_iops: "40000"
+      disk_throughput_mibps: "1200"
     pricing:
       disk_type: gp3
       disk_baseline_iops: "12000"
       disk_baseline_throughput_mibps: "500"
-  # 2026-09-02 correction: disk_size_gb/disk_iops were "1024"/"40000" (this tier's own natural
-  # size_map default). docs/compute-bound-sizing-formula-2026-09.md §2.4 tested 3 configs on
-  # Supabase at this tier (A: 3000/125, B: 6000/250, both ruled out -- disk-throughput-bound; C:
-  # 12000/500, best result, locked in despite disk still running near 100% util -- see that doc
-  # for why PERFENG-111's max_wal_size checkpoint-storm fix isn't being waited on). Same
-  # right-sizing as 4xlarge: disk_size_gb dialed down to 400 (the minimum >=400 GiB crossing
-  # point), disk_iops dialed down from the natural 40,000 default to the tested 12,000 target.
+  # 2026-09-09 correction (PERFENG-116): split into `cost-optimized` (today's existing
+  # 400 GiB/12,000 IOPS/500 MiB/s config, unchanged) and `performance-optimized` (matches the
+  # io-bound row above: 40,000 IOPS/1200 MiB/s, aligned with Supabase/GCP's identical
+  # performance-optimized values at this tier). This is the tier where the underlying pathology
+  # was actually measured directly: Performance Insights + `pg_stat_wal` at cost-optimized found
+  # >90% of active sessions queued on `LWLock:WALWrite` at only 12-19% CPU utilization, and
+  # isolating iops/throughput independently confirmed neither alone fixes it (40k IOPS/500 MiB/s
+  # only: 105,635 tpmC; 12k IOPS/1188 MiB/s only: 77,522 tpmC) -- only raising both together to
+  # the io-bound spec did (measured 218,673-233,233 tpmC vs. 87,409-93,192 at cost-optimized).
+  # See PERFENG-116 for the full writeup.
   - tier: 8xlarge
     bound_type: compute
+    variant: cost-optimized
     set:
       db_instance_class: db.m9g.8xlarge
       warehouses: "512"
@@ -261,6 +325,22 @@ test_points:
       instance_type: c8gd.12xlarge
       disk_size_gb: "400"
       disk_iops: "12000"
+      disk_throughput_mibps: "500"
+    pricing:
+      disk_type: gp3
+      disk_baseline_iops: "12000"
+      disk_baseline_throughput_mibps: "500"
+  - tier: 8xlarge
+    bound_type: compute
+    variant: performance-optimized
+    set:
+      db_instance_class: db.m9g.8xlarge
+      warehouses: "512"
+      threads: "1,2,4,8,16,32,64,128,192"
+      instance_type: c8gd.12xlarge
+      disk_size_gb: "400"
+      disk_iops: "40000"
+      disk_throughput_mibps: "1200"
     pricing:
       disk_type: gp3
       disk_baseline_iops: "12000"

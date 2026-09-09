@@ -66,8 +66,11 @@ needs successes.
 ## Monitoring and resuming
 
 ```bash
-# List sweeps that haven't finished yet
+# List sweeps that haven't finished yet, most recently started first
 ./dbarenactl status
+
+# Include completed sweeps too
+./dbarenactl status --all
 
 # Show detail for one sweep
 ./dbarenactl status <sweep-id>
@@ -78,6 +81,9 @@ needs successes.
 # Delete an obsolete sweep (also tears down infrastructure)
 ./dbarenactl delete <sweep-id>
 ```
+
+Each listed sweep shows a `STARTED` timestamp: the initial run, or the most recent resume,
+whichever is later.
 
 If a sweep stops because a test point ran out of retries, `resume` asks whether to keep
 existing results and extend the budget, or discard progress and start fresh. See
@@ -155,7 +161,7 @@ otherwise the result is still written, with `pricing: null` and a warning.
 | `dbarenactl run --candidate <manifest>` | Run a candidate manifest's sweep end to end |
 | `dbarenactl run --candidate <manifest> --dry-run` | Preview the benchctl invocations without running anything |
 | `dbarenactl resume [sweep-id]` | Continue an incomplete sweep, or list incomplete sweeps if no id is given |
-| `dbarenactl status [sweep-id]` | Show sweep progress, or list incomplete sweeps if no id is given |
+| `dbarenactl status [sweep-id] [--all]` | Show sweep progress, or list incomplete sweeps (or all sweeps with `--all`) if no id is given |
 | `dbarenactl delete <sweep-id>` | Permanently delete a sweep's state and tear down associated infrastructure |
 | `dbarenactl results <sweep-id> [--dest <dir>] [--candidate <manifest>] [--force]` | Assemble `result.json` files from a sweep's fetched artifacts, ready for a `dbarena/dbarena` PR |
 | `dbarenactl pricing fetch --candidate <manifest>` | Fetch and record a pricing snapshot from a provider's own primary source (aws/rds, gcp/cloudsql, gcp/cloudsql-enterprise-plus, supabase); provider and region are derived from the manifest |

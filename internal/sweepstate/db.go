@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS sweeps (
 	error_target TEXT NOT NULL DEFAULT '',
 	error_detail TEXT NOT NULL DEFAULT '',
 	error_at     DATETIME,
-	created_at   DATETIME NOT NULL
+	created_at   DATETIME NOT NULL,
+	last_started_at DATETIME
 );
 
 CREATE TABLE IF NOT EXISTS test_points (
@@ -94,6 +95,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := addLastStartedAtColumnIfMissing(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db}, nil
 }
 
@@ -130,6 +135,46 @@ func addSkippedColumnIfMissing(db *sql.DB) error {
 	}
 	if _, err := db.Exec(`ALTER TABLE test_points ADD COLUMN skipped INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return fmt.Errorf("sweepstate: add test_points.skipped column: %w", err)
+	}
+	return nil
+}
+
+// addLastStartedAtColumnIfMissing retrofits sweeps.last_started_at onto a
+// database created before that column existed, backfilling it from
+// created_at so existing rows sort and display sensibly. Like
+// addSkippedColumnIfMissing, this runs every time the database is opened
+// since CREATE TABLE IF NOT EXISTS only takes effect for brand-new databases.
+func addLastStartedAtColumnIfMissing(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(sweeps)`)
+	if err != nil {
+		return fmt.Errorf("sweepstate: inspect sweeps schema: %w", err)
+	}
+	defer rows.Close()
+
+	hasLastStartedAt := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notNull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
+			return fmt.Errorf("sweepstate: inspect sweeps schema: %w", err)
+		}
+		if name == "last_started_at" {
+			hasLastStartedAt = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("sweepstate: inspect sweeps schema: %w", err)
+	}
+	if hasLastStartedAt {
+		return nil
+	}
+	if _, err := db.Exec(`ALTER TABLE sweeps ADD COLUMN last_started_at DATETIME`); err != nil {
+		return fmt.Errorf("sweepstate: add sweeps.last_started_at column: %w", err)
+	}
+	if _, err := db.Exec(`UPDATE sweeps SET last_started_at = created_at WHERE last_started_at IS NULL`); err != nil {
+		return fmt.Errorf("sweepstate: backfill sweeps.last_started_at: %w", err)
 	}
 	return nil
 }

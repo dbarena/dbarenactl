@@ -38,6 +38,10 @@ type Sweep struct {
 	ErrorDetail string
 	ErrorAt     *time.Time
 	CreatedAt   time.Time
+	// LastStartedAt is updated on every `dbarenactl run`/`resume` invocation
+	// that actually executes this sweep (see executeSweep), so it reflects
+	// either the initial run or the most recent resume, whichever is later.
+	LastStartedAt time.Time
 }
 
 // HasError reports whether the sweep is currently stopped on an

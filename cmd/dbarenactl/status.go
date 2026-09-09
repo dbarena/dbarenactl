@@ -12,7 +12,10 @@ import (
 	"github.com/dbarena/dbarenactl/internal/sweepstate"
 )
 
-var statusBenchctlBin string
+var (
+	statusBenchctlBin string
+	statusAll         bool
+)
 
 var statusCmd = &cobra.Command{
 	Use:   "status [sweep-id]",
@@ -23,6 +26,7 @@ var statusCmd = &cobra.Command{
 
 func init() {
 	statusCmd.Flags().StringVar(&statusBenchctlBin, "benchctl-bin", "benchctl", "Path to the benchctl binary")
+	statusCmd.Flags().BoolVar(&statusAll, "all", false, "Include completed sweeps in the list (only applies with no sweep-id given)")
 }
 
 func runStatusCmd(cmd *cobra.Command, args []string) error {
@@ -37,6 +41,17 @@ func runStatusCmd(cmd *cobra.Command, args []string) error {
 	defer store.Close() //nolint:errcheck
 
 	if len(args) == 0 {
+		if statusAll {
+			sweeps, err := store.ListAllSweeps()
+			if err != nil {
+				return err
+			}
+			if len(sweeps) == 0 {
+				fmt.Println("no sweeps")
+				return nil
+			}
+			return printSweepList(sweeps)
+		}
 		return listIncompleteSweeps(store)
 	}
 

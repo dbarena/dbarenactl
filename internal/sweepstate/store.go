@@ -14,31 +14,32 @@ var ErrNotFound = errors.New("sweepstate: not found")
 // CreateSweep inserts a new sweep row with status running.
 func (s *Store) CreateSweep(sw *Sweep) error {
 	_, err := s.db.Exec(
-		`INSERT INTO sweeps (id, provider, product, plan, workload, params_json, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		sw.ID, sw.Provider, sw.Product, sw.Plan, sw.Workload, sw.ParamsJSON, string(SweepRunning), sw.CreatedAt.UTC(),
+		`INSERT INTO sweeps (id, provider, product, plan, workload, params_json, status, created_at, last_started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		sw.ID, sw.Provider, sw.Product, sw.Plan, sw.Workload, sw.ParamsJSON, string(SweepRunning), sw.CreatedAt.UTC(), sw.CreatedAt.UTC(),
 	)
 	if err != nil {
 		return fmt.Errorf("sweepstate: create sweep %s: %w", sw.ID, err)
 	}
 	sw.Status = SweepRunning
+	sw.LastStartedAt = sw.CreatedAt
 	return nil
 }
 
 // GetSweep loads a sweep by id.
 func (s *Store) GetSweep(id string) (*Sweep, error) {
 	row := s.db.QueryRow(
-		`SELECT id, provider, product, plan, workload, params_json, status, error_action, error_target, error_detail, error_at, created_at
+		`SELECT id, provider, product, plan, workload, params_json, status, error_action, error_target, error_detail, error_at, created_at, last_started_at
 		 FROM sweeps WHERE id = ?`, id,
 	)
 	return scanSweep(row)
 }
 
 // ListIncompleteSweeps returns every sweep not yet marked completed, most
-// recently created first.
+// recently started (initial run or latest resume) first.
 func (s *Store) ListIncompleteSweeps() ([]*Sweep, error) {
 	rows, err := s.db.Query(
-		`SELECT id, provider, product, plan, workload, params_json, status, error_action, error_target, error_detail, error_at, created_at
-		 FROM sweeps WHERE status != ? ORDER BY created_at DESC`, string(SweepCompleted),
+		`SELECT id, provider, product, plan, workload, params_json, status, error_action, error_target, error_detail, error_at, created_at, last_started_at
+		 FROM sweeps WHERE status != ? ORDER BY last_started_at DESC`, string(SweepCompleted),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("sweepstate: list incomplete sweeps: %w", err)
@@ -54,6 +55,41 @@ func (s *Store) ListIncompleteSweeps() ([]*Sweep, error) {
 		out = append(out, sw)
 	}
 	return out, rows.Err()
+}
+
+// ListAllSweeps returns every sweep regardless of status, most recently
+// started (initial run or latest resume) first.
+func (s *Store) ListAllSweeps() ([]*Sweep, error) {
+	rows, err := s.db.Query(
+		`SELECT id, provider, product, plan, workload, params_json, status, error_action, error_target, error_detail, error_at, created_at, last_started_at
+		 FROM sweeps ORDER BY last_started_at DESC`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("sweepstate: list all sweeps: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*Sweep
+	for rows.Next() {
+		sw, err := scanSweepRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sw)
+	}
+	return out, rows.Err()
+}
+
+// TouchLastStarted records that the sweep is being (re)started right now --
+// called on every `dbarenactl run`/`resume` invocation that actually
+// executes the sweep, so LastStartedAt always reflects the initial run or
+// the most recent resume, whichever is later.
+func (s *Store) TouchLastStarted(sweepID string, at time.Time) error {
+	res, err := s.db.Exec(`UPDATE sweeps SET last_started_at = ? WHERE id = ?`, at.UTC(), sweepID)
+	if err != nil {
+		return fmt.Errorf("sweepstate: touch last started for sweep %s: %w", sweepID, err)
+	}
+	return checkOneRowAffected(res, "sweep", sweepID)
 }
 
 type rowScanner interface {
@@ -74,13 +110,19 @@ func scanSweepGeneric(r rowScanner) (*Sweep, error) {
 	var sw Sweep
 	var status string
 	var errorAt sql.NullTime
+	var lastStartedAt sql.NullTime
 	if err := r.Scan(&sw.ID, &sw.Provider, &sw.Product, &sw.Plan, &sw.Workload, &sw.ParamsJSON, &status,
-		&sw.ErrorAction, &sw.ErrorTarget, &sw.ErrorDetail, &errorAt, &sw.CreatedAt); err != nil {
+		&sw.ErrorAction, &sw.ErrorTarget, &sw.ErrorDetail, &errorAt, &sw.CreatedAt, &lastStartedAt); err != nil {
 		return nil, fmt.Errorf("sweepstate: scan sweep: %w", err)
 	}
 	sw.Status = SweepStatus(status)
 	if errorAt.Valid {
 		sw.ErrorAt = &errorAt.Time
+	}
+	if lastStartedAt.Valid {
+		sw.LastStartedAt = lastStartedAt.Time
+	} else {
+		sw.LastStartedAt = sw.CreatedAt
 	}
 	return &sw, nil
 }

@@ -43,6 +43,7 @@ test_points:
     bound_type: io
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
+      region: "us-east-1"
       project_size: small
       warehouses: "80"
       disk_size_gb: "20"
@@ -57,6 +58,7 @@ test_points:
     bound_type: compute
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
+      region: "us-east-1"
       project_size: small
       warehouses: "8"
       disk_size_gb: "20"
@@ -70,6 +72,7 @@ test_points:
     bound_type: io
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
+      region: "us-east-1"
       project_size: medium
       warehouses: "160"
       disk_size_gb: "32"
@@ -87,6 +90,7 @@ test_points:
     bound_type: compute
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
+      region: "us-east-1"
       project_size: medium
       warehouses: "16"
       disk_size_gb: "20"
@@ -106,6 +110,7 @@ test_points:
     bound_type: io
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
+      region: "us-east-1"
       project_size: large
       warehouses: "320"
       disk_size_gb: "64"
@@ -121,6 +126,7 @@ test_points:
     bound_type: compute
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
+      region: "us-east-1"
       project_size: large
       warehouses: "32"
       disk_size_gb: "20"
@@ -154,6 +160,7 @@ test_points:
     bound_type: io
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
+      region: "us-east-1"
       project_size: xlarge
       warehouses: "640"
       disk_size_gb: "128"
@@ -170,6 +177,7 @@ test_points:
     bound_type: compute
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
+      region: "us-east-1"
       project_size: xlarge
       warehouses: "64"
       disk_size_gb: "20"
@@ -197,6 +205,7 @@ test_points:
     bound_type: io
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
+      region: "us-east-1"
       project_size: 2xlarge
       warehouses: "1280"
       disk_size_gb: "256"
@@ -217,6 +226,7 @@ test_points:
     variant: cost-optimized
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
+      region: "us-east-1"
       project_size: 2xlarge
       warehouses: "128"
       disk_size_gb: "64"
@@ -232,6 +242,7 @@ test_points:
     variant: performance-optimized
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
+      region: "us-east-1"
       project_size: 2xlarge
       warehouses: "128"
       disk_size_gb: "64"
@@ -254,6 +265,7 @@ test_points:
     bound_type: io
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
+      region: "us-east-1"
       project_size: 4xlarge
       warehouses: "2560"
       disk_size_gb: "512"
@@ -273,6 +285,7 @@ test_points:
     variant: cost-optimized
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
+      region: "us-east-1"
       project_size: 4xlarge
       warehouses: "256"
       disk_size_gb: "128"
@@ -288,6 +301,7 @@ test_points:
     variant: performance-optimized
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
+      region: "us-east-1"
       project_size: 4xlarge
       warehouses: "256"
       disk_size_gb: "128"
@@ -308,6 +322,7 @@ test_points:
     bound_type: io
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
+      region: "us-east-1"
       project_size: 8xlarge
       warehouses: "5120"
       disk_size_gb: "1024"
@@ -328,6 +343,7 @@ test_points:
     variant: cost-optimized
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
+      region: "us-east-1"
       project_size: 8xlarge
       warehouses: "512"
       disk_size_gb: "256"
@@ -344,6 +360,7 @@ test_points:
     variant: performance-optimized
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
+      region: "us-east-1"
       project_size: 8xlarge
       warehouses: "512"
       disk_size_gb: "256"

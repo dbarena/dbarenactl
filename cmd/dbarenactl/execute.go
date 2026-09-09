@@ -121,6 +121,9 @@ func executeSweep(ctx context.Context, store *sweepstate.Store, sweepID, benchct
 	if err != nil {
 		return err
 	}
+	if err := store.TouchLastStarted(sweepID, time.Now().UTC()); err != nil {
+		return err
+	}
 	var params sweepParams
 	if err := json.Unmarshal([]byte(sweep.ParamsJSON), &params); err != nil {
 		return fmt.Errorf("sweep %s: corrupt params: %w", sweepID, err)

@@ -54,6 +54,9 @@ func TestSweep_CreateAndGet(t *testing.T) {
 	if got.HasError() {
 		t.Error("fresh sweep should not have an error")
 	}
+	if !got.LastStartedAt.Equal(got.CreatedAt) {
+		t.Errorf("LastStartedAt = %v, want equal to CreatedAt %v", got.LastStartedAt, got.CreatedAt)
+	}
 }
 
 func TestSweep_ProductAndPlanRoundTrip(t *testing.T) {
@@ -148,6 +151,57 @@ func TestListIncompleteSweeps_ExcludesCompleted(t *testing.T) {
 	}
 	if len(incomplete) != 1 || incomplete[0].ID != "sweep-running" {
 		t.Errorf("incomplete = %v", incomplete)
+	}
+}
+
+func TestListAllSweeps_IncludesCompleted(t *testing.T) {
+	st := openTestStore(t)
+	seedSweep(t, st, "sweep-running")
+	seedSweep(t, st, "sweep-done")
+	if err := st.MarkCompleted("sweep-done"); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := st.ListAllSweeps()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 {
+		t.Errorf("all = %v, want 2 sweeps", all)
+	}
+}
+
+func TestTouchLastStarted_UpdatesTimestampAndReordersLists(t *testing.T) {
+	st := openTestStore(t)
+	seedSweep(t, st, "sweep-a")
+	seedSweep(t, st, "sweep-b")
+
+	later := time.Now().UTC().Add(time.Hour)
+	if err := st.TouchLastStarted("sweep-a", later); err != nil {
+		t.Fatal(err)
+	}
+
+	sw, err := st.GetSweep("sweep-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sw.LastStartedAt.Equal(later) {
+		t.Errorf("LastStartedAt = %v, want %v", sw.LastStartedAt, later)
+	}
+
+	all, err := st.ListAllSweeps()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 || all[0].ID != "sweep-a" {
+		t.Errorf("all = %v, want sweep-a first (most recently started)", all)
+	}
+}
+
+func TestTouchLastStarted_NotFound(t *testing.T) {
+	st := openTestStore(t)
+	if err := st.TouchLastStarted("nope", time.Now().UTC()); !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
 	}
 }
 

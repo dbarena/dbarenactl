@@ -207,7 +207,7 @@ func runResults(_ *cobra.Command, args []string) error {
 		}
 		if isCheckout {
 			relPath := filepath.Join(provider, product, m.Workload, scenario, "result.json")
-			if err := updateResultsIndex(dest, provider, product, m.Workload, scenario, relPath); err != nil {
+			if err := updateResultsIndex(dest, provider, product, m.Workload, scenario, tp.Variant, relPath); err != nil {
 				return fmt.Errorf("dbarenactl results: %s: update index.json: %w", scenario, err)
 			}
 		}
@@ -267,12 +267,19 @@ type pricingInputs struct {
 }
 
 // resolvePricingInputs reads pricingInputs from a test point definition.
-// instanceType falls back to def.Set["project_size"] when def.Pricing has no
-// db_instance_type -- the correct behavior for Supabase, whose project_size
-// doubles as its own compute SKU and which has no pricing: block at all.
-func resolvePricingInputs(def *manifest.TestPointDef) pricingInputs {
-	instanceType := def.Pricing["db_instance_type"]
-	if instanceType == "" {
+// instanceType's source depends on which provider owns def, since each names
+// its compute SKU differently: AWS declares db_instance_class as a real
+// benchctl scenario input, read from Set; Supabase's project_size doubles as
+// its own compute SKU, also read from Set; GCP has no such benchctl input, so
+// it's stated explicitly under Pricing.db_instance_type instead.
+func resolvePricingInputs(provider string, def *manifest.TestPointDef) pricingInputs {
+	var instanceType string
+	switch provider {
+	case manifest.ProviderAWS:
+		instanceType = def.Set["db_instance_class"]
+	case manifest.ProviderGCP:
+		instanceType = def.Pricing["db_instance_type"]
+	case manifest.ProviderSupabase:
 		instanceType = def.Set["project_size"]
 	}
 	return pricingInputs{
@@ -316,7 +323,7 @@ func buildResultDoc(in resultDocInputs) (*resultDoc, error) {
 	provider := slugify(in.Manifest.Provider)
 	product := slugify(in.Manifest.Product)
 	scenario := scenarioSlug(in.TestPoint.BoundType, in.TestPoint.Tier, in.TestPoint.Variant)
-	pi := resolvePricingInputs(in.Def)
+	pi := resolvePricingInputs(in.Manifest.Provider, in.Def)
 
 	sp, err := buildSweepPoints(scenario, in.Successful, selected, pi.warehouses, in.ScenarioDir)
 	if err != nil {

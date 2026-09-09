@@ -12,35 +12,33 @@ import (
 	"github.com/dbarena/dbarenactl/internal/sweepstate"
 )
 
-// TestResolvePricingInputs_ReadsFromPricingBlock is a regression test for the
-// 2026-09-01 bug: db_instance_type/disk_type/disk_baseline_iops/
-// disk_baseline_throughput_mibps must be read from TestPointDef.Pricing, not
-// TestPointDef.Set (Set's keys are forwarded verbatim to benchctl as --set
-// flags, and none of these four are benchctl scenario inputs).
-func TestResolvePricingInputs_ReadsFromPricingBlock(t *testing.T) {
+// TestResolvePricingInputs_GCPReadsPricingBlock covers GCP's test points,
+// which have no benchctl input for their compute SKU or disk-baseline
+// overrides, so those live in TestPointDef.Pricing instead of Set (Set's
+// keys are forwarded verbatim to benchctl as --set flags).
+func TestResolvePricingInputs_GCPReadsPricingBlock(t *testing.T) {
 	def := &manifest.TestPointDef{
 		Set: map[string]string{
-			"project_size":          "xlarge",
 			"disk_size_gb":          "400",
 			"disk_iops":             "12000",
 			"disk_throughput_mibps": "500",
 			"warehouses":            "640",
 		},
 		Pricing: map[string]string{
-			"db_instance_type":               "db.m6g.xlarge",
-			"disk_type":                      "gp3",
+			"db_instance_type":               "db-custom-N4-4-16384",
+			"disk_type":                      "HYPERDISK_BALANCED",
 			"disk_baseline_iops":             "12000",
 			"disk_baseline_throughput_mibps": "500",
 		},
 	}
 
-	pi := resolvePricingInputs(def)
+	pi := resolvePricingInputs(manifest.ProviderGCP, def)
 
-	if pi.instanceType != "db.m6g.xlarge" {
-		t.Errorf("instanceType = %q, want %q", pi.instanceType, "db.m6g.xlarge")
+	if pi.instanceType != "db-custom-N4-4-16384" {
+		t.Errorf("instanceType = %q, want %q", pi.instanceType, "db-custom-N4-4-16384")
 	}
-	if pi.diskType != "gp3" {
-		t.Errorf("diskType = %q, want %q", pi.diskType, "gp3")
+	if pi.diskType != "HYPERDISK_BALANCED" {
+		t.Errorf("diskType = %q, want %q", pi.diskType, "HYPERDISK_BALANCED")
 	}
 	if pi.diskBaselineIOPS == nil || *pi.diskBaselineIOPS != 12000 {
 		t.Errorf("diskBaselineIOPS = %v, want 12000", pi.diskBaselineIOPS)
@@ -64,11 +62,41 @@ func TestResolvePricingInputs_ReadsFromPricingBlock(t *testing.T) {
 	}
 }
 
-// TestResolvePricingInputs_FallsBackToProjectSizeWithoutPricingBlock covers
-// Supabase's test points, which have no pricing: block at all (project_size
-// doubles as its own compute SKU, and it has no db_instance_type or
-// disk-baseline-override concept).
-func TestResolvePricingInputs_FallsBackToProjectSizeWithoutPricingBlock(t *testing.T) {
+// TestResolvePricingInputs_AWSReadsDbInstanceClassFromSet covers AWS's test
+// points, which declare db_instance_class as a real benchctl scenario input
+// (Set), with disk_type/disk_baseline_* in Pricing (no benchctl-input
+// counterpart). A stray Pricing.db_instance_type/Set.project_size -- neither
+// of which any real AWS candidate file sets -- must not affect the result:
+// AWS's switch case in resolvePricingInputs never reads either field.
+func TestResolvePricingInputs_AWSReadsDbInstanceClassFromSet(t *testing.T) {
+	def := &manifest.TestPointDef{
+		Set: map[string]string{
+			"db_instance_class": "db.m9g.xlarge",
+			"disk_size_gb":      "400",
+			"disk_iops":         "12000",
+			"project_size":      "should-be-ignored",
+		},
+		Pricing: map[string]string{
+			"disk_type":        "gp3",
+			"db_instance_type": "should-be-ignored",
+		},
+	}
+
+	pi := resolvePricingInputs(manifest.ProviderAWS, def)
+
+	if pi.instanceType != "db.m9g.xlarge" {
+		t.Errorf("instanceType = %q, want %q", pi.instanceType, "db.m9g.xlarge")
+	}
+	if pi.diskType != "gp3" {
+		t.Errorf("diskType = %q, want %q", pi.diskType, "gp3")
+	}
+}
+
+// TestResolvePricingInputs_SupabaseReadsProjectSizeFromSet covers Supabase's
+// test points, which have no pricing: block at all -- project_size doubles as
+// its own compute SKU, and there's no db_instance_type or
+// disk-baseline-override concept.
+func TestResolvePricingInputs_SupabaseReadsProjectSizeFromSet(t *testing.T) {
 	def := &manifest.TestPointDef{
 		Set: map[string]string{
 			"project_size": "xlarge",
@@ -76,10 +104,10 @@ func TestResolvePricingInputs_FallsBackToProjectSizeWithoutPricingBlock(t *testi
 		},
 	}
 
-	pi := resolvePricingInputs(def)
+	pi := resolvePricingInputs(manifest.ProviderSupabase, def)
 
 	if pi.instanceType != "xlarge" {
-		t.Errorf("instanceType = %q, want %q (fallback to project_size)", pi.instanceType, "xlarge")
+		t.Errorf("instanceType = %q, want %q", pi.instanceType, "xlarge")
 	}
 	if pi.diskType != "" {
 		t.Errorf("diskType = %q, want empty", pi.diskType)
@@ -92,20 +120,19 @@ func TestResolvePricingInputs_FallsBackToProjectSizeWithoutPricingBlock(t *testi
 	}
 }
 
-// TestResolvePricingInputs_PricingNeverLeaksSetOnlyKeys guards the other
-// direction of the bug: a db_instance_type placed in Set (as every candidate
-// file used to do) must NOT be picked up here -- it has to move to Pricing,
-// or resolvePricingInputs falls back to project_size instead, exactly as it
-// would for a manifest that never had the field at all.
-func TestResolvePricingInputs_PricingNeverLeaksSetOnlyKeys(t *testing.T) {
+// TestResolvePricingInputs_SupabaseIgnoresStraySetKeys guards against a
+// db_instance_type key accidentally placed in Set (as every AWS/GCP candidate
+// file used to do, historically) leaking into a Supabase result -- Supabase's
+// switch case only ever reads Set["project_size"].
+func TestResolvePricingInputs_SupabaseIgnoresStraySetKeys(t *testing.T) {
 	def := &manifest.TestPointDef{
 		Set: map[string]string{
 			"project_size":     "xlarge",
-			"db_instance_type": "db.m6g.xlarge", // stale location; must be ignored
+			"db_instance_type": "db.m6g.xlarge", // stray; must be ignored
 		},
 	}
 
-	pi := resolvePricingInputs(def)
+	pi := resolvePricingInputs(manifest.ProviderSupabase, def)
 
 	if pi.instanceType != "xlarge" {
 		t.Errorf("instanceType = %q, want %q -- db_instance_type in Set must not be read", pi.instanceType, "xlarge")

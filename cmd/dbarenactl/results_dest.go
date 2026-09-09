@@ -124,7 +124,13 @@ type indexEntry struct {
 	Product  string `json:"product"`
 	Workload string `json:"workload"`
 	Scenario string `json:"scenario"`
-	Path     string `json:"path"`
+	// Variant is also folded into Scenario's slug suffix (see scenarioSlug)
+	// -- kept here too, as its own property, so callers can filter/group by
+	// variant without string-parsing the scenario slug. Omitted when this
+	// test point has no variant, matching TestPointDef.Variant's own
+	// omitempty convention.
+	Variant string `json:"variant,omitempty"`
+	Path    string `json:"path"`
 }
 
 // updateResultsIndex appends or updates this scenario's entry in
@@ -133,7 +139,7 @@ type indexEntry struct {
 // unrelated run of `results` never perturbs their key order/formatting --
 // only the one entry actually being added or updated changes, keeping any
 // resulting diff minimal and reviewable.
-func updateResultsIndex(destRoot, provider, product, workload, scenario, relPath string) error {
+func updateResultsIndex(destRoot, provider, product, workload, scenario, variant, relPath string) error {
 	indexPath := filepath.Join(destRoot, "results", "index.json")
 	var raws []json.RawMessage
 	data, err := os.ReadFile(indexPath)
@@ -148,7 +154,7 @@ func updateResultsIndex(destRoot, provider, product, workload, scenario, relPath
 		return fmt.Errorf("read %s: %w", indexPath, err)
 	}
 
-	updated := indexEntry{Provider: provider, Product: product, Workload: workload, Scenario: scenario, Path: relPath}
+	updated := indexEntry{Provider: provider, Product: product, Workload: workload, Scenario: scenario, Variant: variant, Path: relPath}
 	updatedJSON, err := json.Marshal(updated)
 	if err != nil {
 		return fmt.Errorf("marshal index entry: %w", err)

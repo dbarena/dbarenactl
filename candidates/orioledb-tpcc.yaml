@@ -15,7 +15,6 @@ test_points:
     bound_type: io
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
-      profile: ""
       region: "us-east-1"
       project_size: small
       warehouses: "80"
@@ -28,7 +27,6 @@ test_points:
     bound_type: compute
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
-      profile: ""
       region: "us-east-1"
       project_size: small
       warehouses: "8"
@@ -41,7 +39,6 @@ test_points:
     bound_type: io
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
-      profile: ""
       region: "us-east-1"
       project_size: medium
       warehouses: "160"
@@ -55,7 +52,6 @@ test_points:
     bound_type: compute
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
-      profile: ""
       region: "us-east-1"
       project_size: medium
       warehouses: "16"
@@ -68,7 +64,6 @@ test_points:
     bound_type: io
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
-      profile: ""
       region: "us-east-1"
       project_size: large
       warehouses: "320"
@@ -82,7 +77,6 @@ test_points:
     bound_type: compute
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
-      profile: ""
       region: "us-east-1"
       project_size: large
       warehouses: "32"
@@ -95,7 +89,6 @@ test_points:
     bound_type: io
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
-      profile: ""
       region: "us-east-1"
       project_size: xlarge
       warehouses: "640"
@@ -109,7 +102,6 @@ test_points:
     bound_type: compute
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
-      profile: ""
       region: "us-east-1"
       project_size: xlarge
       warehouses: "64"
@@ -122,7 +114,6 @@ test_points:
     bound_type: io
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
-      profile: ""
       region: "us-east-1"
       project_size: 2xlarge
       warehouses: "1280"
@@ -134,9 +125,9 @@ test_points:
       instance_type: c8gd.2xlarge
   - tier: 2xlarge
     bound_type: compute
+    variant: cost-optimized
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
-      profile: ""
       region: "us-east-1"
       project_size: 2xlarge
       warehouses: "128"
@@ -145,11 +136,23 @@ test_points:
       disk_throughput_mibps: "250"
       threads: "1,2,4,8,16,32,48"
       instance_type: c8gd.2xlarge
+  - tier: 2xlarge
+    bound_type: compute
+    variant: performance-optimized
+    set:
+      supabase_org_id: "{{ params.supabase_org_id }}"
+      region: "us-east-1"
+      project_size: 2xlarge
+      warehouses: "128"
+      disk_size_gb: "64"
+      disk_iops: "12000"
+      disk_throughput_mibps: "300"
+      threads: "1,2,4,8,16,32,48"
+      instance_type: c8gd.2xlarge
   - tier: 4xlarge
     bound_type: io
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
-      profile: ""
       region: "us-east-1"
       project_size: 4xlarge
       warehouses: "2560"
@@ -161,9 +164,9 @@ test_points:
       instance_type: c8gd.4xlarge
   - tier: 4xlarge
     bound_type: compute
+    variant: cost-optimized
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
-      profile: ""
       region: "us-east-1"
       project_size: 4xlarge
       warehouses: "256"
@@ -172,11 +175,23 @@ test_points:
       disk_throughput_mibps: "500"
       threads: "1,2,4,8,16,32,64,96"
       instance_type: c8gd.4xlarge
+  - tier: 4xlarge
+    bound_type: compute
+    variant: performance-optimized
+    set:
+      supabase_org_id: "{{ params.supabase_org_id }}"
+      region: "us-east-1"
+      project_size: 4xlarge
+      warehouses: "256"
+      disk_size_gb: "128"
+      disk_iops: "20000"
+      disk_throughput_mibps: "600"
+      threads: "1,2,4,8,16,32,64,96"
+      instance_type: c8gd.4xlarge
   - tier: 8xlarge
     bound_type: io
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
-      profile: ""
       region: "us-east-1"
       project_size: 8xlarge
       warehouses: "5120"
@@ -188,14 +203,27 @@ test_points:
       instance_type: c8gd.8xlarge
   - tier: 8xlarge
     bound_type: compute
+    variant: cost-optimized
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
-      profile: ""
       region: "us-east-1"
       project_size: 8xlarge
       warehouses: "512"
       disk_size_gb: "256"
       disk_iops: "12000"
       disk_throughput_mibps: "500"
+      threads: "1,2,4,8,16,32,64,128,192"
+      instance_type: c8gd.8xlarge
+  - tier: 8xlarge
+    bound_type: compute
+    variant: performance-optimized
+    set:
+      supabase_org_id: "{{ params.supabase_org_id }}"
+      region: "us-east-1"
+      project_size: 8xlarge
+      warehouses: "512"
+      disk_size_gb: "256"
+      disk_iops: "40000"
+      disk_throughput_mibps: "1200"
       threads: "1,2,4,8,16,32,64,128,192"
       instance_type: c8gd.8xlarge

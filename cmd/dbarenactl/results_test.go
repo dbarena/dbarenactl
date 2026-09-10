@@ -12,21 +12,22 @@ import (
 	"github.com/dbarena/dbarenactl/internal/sweepstate"
 )
 
-// TestResolvePricingInputs_GCPReadsPricingBlock covers GCP's test points,
-// which have no benchctl input for their compute SKU or disk-baseline
-// overrides, so those live in TestPointDef.Pricing instead of Set (Set's
-// keys are forwarded verbatim to benchctl as --set flags).
-func TestResolvePricingInputs_GCPReadsPricingBlock(t *testing.T) {
+// TestResolvePricingInputs_GCPReadsDbInstanceTypeFromSet covers GCP's test
+// points, which declare db_instance_type and disk_type as real benchctl
+// scenario inputs (Set), same as AWS's db_instance_class -- only the
+// disk-baseline fields have no benchctl-input counterpart and stay in
+// TestPointDef.Pricing.
+func TestResolvePricingInputs_GCPReadsDbInstanceTypeFromSet(t *testing.T) {
 	def := &manifest.TestPointDef{
 		Set: map[string]string{
+			"db_instance_type":      "db-custom-N4-4-16384",
+			"disk_type":             "HYPERDISK_BALANCED",
 			"disk_size_gb":          "400",
 			"disk_iops":             "12000",
 			"disk_throughput_mibps": "500",
 			"warehouses":            "640",
 		},
 		Pricing: map[string]string{
-			"db_instance_type":               "db-custom-N4-4-16384",
-			"disk_type":                      "HYPERDISK_BALANCED",
 			"disk_baseline_iops":             "12000",
 			"disk_baseline_throughput_mibps": "500",
 		},
@@ -59,6 +60,32 @@ func TestResolvePricingInputs_GCPReadsPricingBlock(t *testing.T) {
 	}
 	if pi.warehouses == nil || *pi.warehouses != 640 {
 		t.Errorf("warehouses = %v, want 640", pi.warehouses)
+	}
+}
+
+// TestResolvePricingInputs_GCPIgnoresStrayPricingKeys guards against a
+// db_instance_type/disk_type key accidentally left in Pricing (the old
+// location, before both became real benchctl inputs) from leaking into a
+// GCP result -- GCP's switch case now only ever reads them from Set.
+func TestResolvePricingInputs_GCPIgnoresStrayPricingKeys(t *testing.T) {
+	def := &manifest.TestPointDef{
+		Set: map[string]string{
+			"db_instance_type": "db-custom-N4-2-4096",
+			"disk_type":        "HYPERDISK_BALANCED",
+		},
+		Pricing: map[string]string{
+			"db_instance_type": "should-be-ignored",
+			"disk_type":        "should-be-ignored",
+		},
+	}
+
+	pi := resolvePricingInputs(manifest.ProviderGCP, def)
+
+	if pi.instanceType != "db-custom-N4-2-4096" {
+		t.Errorf("instanceType = %q, want %q -- Pricing.db_instance_type must not be read", pi.instanceType, "db-custom-N4-2-4096")
+	}
+	if pi.diskType != "HYPERDISK_BALANCED" {
+		t.Errorf("diskType = %q, want %q -- Pricing.disk_type must not be read", pi.diskType, "HYPERDISK_BALANCED")
 	}
 }
 

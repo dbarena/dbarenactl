@@ -116,9 +116,9 @@ func (Calculator) Cost(items []pricing.Item, in pricing.CostInput) (*pricing.Cos
 	// don't repeat the machine family the way vCPU/RAM ones do (e.g.
 	// "Enterprise Storage Hyperdisk Balanced Capacity" has no "N4" in it), so
 	// it can't be guessed from the tier string -- it must come from the
-	// candidate manifest's pricing: disk_type.
+	// candidate manifest (set: disk_type for the Enterprise edition).
 	if in.DiskType == "" {
-		return nil, fmt.Errorf("gcp: cost: disk_type is required (pricing: disk_type in the candidate manifest, e.g. %q or %q) -- GCP Cloud SQL prices differ by disk type and cannot be guessed from the tier string alone", "HYPERDISK_BALANCED", "PD_SSD")
+		return nil, fmt.Errorf("gcp: cost: disk_type is required in the candidate manifest (e.g. %q or %q) -- GCP Cloud SQL prices differ by disk type and cannot be guessed from the tier string alone", "HYPERDISK_BALANCED", "PD_SSD")
 	}
 	if in.DiskType != "HYPERDISK_BALANCED" && in.DiskType != "PD_SSD" {
 		return nil, fmt.Errorf("gcp: cost: unsupported disk_type %q -- expected %q or %q", in.DiskType, "HYPERDISK_BALANCED", "PD_SSD")

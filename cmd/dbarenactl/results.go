@@ -268,23 +268,29 @@ type pricingInputs struct {
 
 // resolvePricingInputs reads pricingInputs from a test point definition.
 // instanceType's source depends on which provider owns def, since each names
-// its compute SKU differently: AWS declares db_instance_class as a real
-// benchctl scenario input, read from Set; Supabase's project_size doubles as
-// its own compute SKU, also read from Set; GCP has no such benchctl input, so
-// it's stated explicitly under Pricing.db_instance_type instead.
+// its compute SKU differently, but all three now declare it as a real
+// benchctl scenario input, read from Set: AWS's db_instance_class, GCP's
+// db_instance_type, and Supabase's project_size (which doubles as its own
+// compute SKU). diskType is similar for GCP (a real benchctl input,
+// disk_type, also read from Set) but not for AWS/Supabase, whose disk type
+// (gp3) isn't a benchctl input -- it's stated explicitly under Pricing.disk_type
+// instead.
 func resolvePricingInputs(provider string, def *manifest.TestPointDef) pricingInputs {
-	var instanceType string
+	var instanceType, diskType string
 	switch provider {
 	case manifest.ProviderAWS:
 		instanceType = def.Set["db_instance_class"]
+		diskType = def.Pricing["disk_type"]
 	case manifest.ProviderGCP:
-		instanceType = def.Pricing["db_instance_type"]
+		instanceType = def.Set["db_instance_type"]
+		diskType = def.Set["disk_type"]
 	case manifest.ProviderSupabase:
 		instanceType = def.Set["project_size"]
+		diskType = def.Pricing["disk_type"]
 	}
 	return pricingInputs{
 		instanceType:           instanceType,
-		diskType:               def.Pricing["disk_type"],
+		diskType:               diskType,
 		diskGB:                 setFloat(def.Set, "disk_size_gb"),
 		iops:                   setFloat(def.Set, "disk_iops"),
 		throughputMbps:         setFloat(def.Set, "disk_throughput_mibps"),

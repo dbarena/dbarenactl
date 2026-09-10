@@ -55,18 +55,16 @@ test_points:
   # is 3,000 IOPS and 140 MiB/s.
   #
   # instance_type is the load driver's own GCE machine type (independent of
-  # project_size).
+  # db_instance_type, the Cloud SQL target's own machine type below).
   - tier: medium
     bound_type: io
     set:
-      project_size: medium
       warehouses: "160"
       threads: "1,2,4,8,12"
       instance_type: c4a-standard-4
       disk_size_gb: "32"
       disk_iops: "3000"
       disk_throughput_mibps: "140"
-    pricing:
       db_instance_type: db-custom-N4-2-4096
       disk_type: HYPERDISK_BALANCED
   # 2026-09-02 correction: disk_size_gb was "32" (io-bound's value) -- drops to the 20 GB floor
@@ -75,14 +73,12 @@ test_points:
   - tier: medium
     bound_type: compute
     set:
-      project_size: medium
       warehouses: "16"
       threads: "1,2,4,8,12"
       instance_type: c4a-standard-4
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_throughput_mibps: "140"
-    pricing:
       db_instance_type: db-custom-N4-2-4096
       disk_type: HYPERDISK_BALANCED
   # large: db-custom-N4-2-8192 (2 vCPU / 8 GB, matches RDS's db.m6g.large),
@@ -94,14 +90,12 @@ test_points:
   - tier: large
     bound_type: io
     set:
-      project_size: large
       warehouses: "320"
       threads: "1,2,4,8,12"
       instance_type: c4a-standard-4
       disk_size_gb: "64"
       disk_iops: "3000"
       disk_throughput_mibps: "140"
-    pricing:
       db_instance_type: db-custom-N4-2-8192
       disk_type: HYPERDISK_BALANCED
   # 2026-09-02 correction: disk_iops was "3600" -- GCP's HYPERDISK_BALANCED floor is 3,000 (see
@@ -112,14 +106,12 @@ test_points:
   - tier: large
     bound_type: compute
     set:
-      project_size: large
       warehouses: "32"
       threads: "1,2,4,8,12"
       instance_type: c4a-standard-4
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_throughput_mibps: "140"
-    pricing:
       db_instance_type: db-custom-N4-2-8192
       disk_type: HYPERDISK_BALANCED
   # xlarge: db-custom-N4-4-16384 (4 vCPU / 16 GB, matches RDS's db.m6g.xlarge),
@@ -133,14 +125,12 @@ test_points:
   - tier: xlarge
     bound_type: io
     set:
-      project_size: xlarge
       warehouses: "640"
       threads: "1,2,4,8,16,24"
       instance_type: c4a-standard-4
       disk_size_gb: "128"
       disk_iops: "12000"
       disk_throughput_mibps: "149"
-    pricing:
       db_instance_type: db-custom-N4-4-16384
       disk_type: HYPERDISK_BALANCED
   # 2026-09-04 correction: disk_size_gb/disk_iops/disk_throughput_mibps were "20"/"3000"/"140".
@@ -162,31 +152,26 @@ test_points:
   - tier: xlarge
     bound_type: compute
     set:
-      project_size: xlarge
       warehouses: "64"
       threads: "1,2,4,8,16,24"
       instance_type: c4a-standard-4
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_throughput_mibps: "140"
-    pricing:
       db_instance_type: db-custom-N4-4-16384
       disk_type: HYPERDISK_BALANCED
   # 2xlarge: db-custom-N4-8-32768 (8 vCPU / 32 GB, matches RDS's
   # db.m6g.2xlarge), 256 GB disk, 12,000 IOPS / 297 MiB/s (Supabase's
-  # documented 2XL baseline) -- HYPERDISK_BALANCED applies the size_map
-  # default with no override needed, same as medium/large/xlarge.
+  # documented 2XL baseline).
   - tier: 2xlarge
     bound_type: io
     set:
-      project_size: 2xlarge
       warehouses: "1280"
       threads: "1,2,4,8,16,32,48"
       instance_type: c4a-standard-8
       disk_size_gb: "256"
       disk_iops: "12000"
       disk_throughput_mibps: "297"
-    pricing:
       db_instance_type: db-custom-N4-8-32768
       disk_type: HYPERDISK_BALANCED
   # 2026-09-02 correction: disk_size_gb/disk_iops/disk_throughput_mibps were "256"/"12000"/"297"
@@ -211,44 +196,38 @@ test_points:
     bound_type: compute
     variant: cost-optimized
     set:
-      project_size: 2xlarge
       warehouses: "128"
       threads: "1,2,4,8,16,32,48"
       instance_type: c4a-standard-8
       disk_size_gb: "64"
       disk_iops: "6000"
       disk_throughput_mibps: "250"
-    pricing:
       db_instance_type: db-custom-N4-8-32768
       disk_type: HYPERDISK_BALANCED
   - tier: 2xlarge
     bound_type: compute
     variant: performance-optimized
     set:
-      project_size: 2xlarge
       warehouses: "128"
       threads: "1,2,4,8,16,32,48"
       instance_type: c4a-standard-8
       disk_size_gb: "64"
       disk_iops: "12000"
       disk_throughput_mibps: "300"
-    pricing:
       db_instance_type: db-custom-N4-8-32768
       disk_type: HYPERDISK_BALANCED
   # 4xlarge: db-custom-N4-16-65536 (16 vCPU / 64 GB, matches RDS's
   # db.m6g.4xlarge), 512 GB disk, 20,000 IOPS / 594 MiB/s (Supabase's
-  # documented 4XL baseline), size_map default, no override needed.
+  # documented 4XL baseline).
   - tier: 4xlarge
     bound_type: io
     set:
-      project_size: 4xlarge
       warehouses: "2560"
       threads: "1,2,4,8,16,32,64,96"
       instance_type: c4a-standard-16
       disk_size_gb: "512"
       disk_iops: "20000"
       disk_throughput_mibps: "594"
-    pricing:
       db_instance_type: db-custom-N4-16-65536
       disk_type: HYPERDISK_BALANCED
   # 2026-09-02 correction: disk_size_gb/disk_iops/disk_throughput_mibps were "512"/"20000"/"594"
@@ -270,44 +249,38 @@ test_points:
     bound_type: compute
     variant: cost-optimized
     set:
-      project_size: 4xlarge
       warehouses: "256"
       threads: "1,2,4,8,16,32,64,96"
       instance_type: c4a-standard-16
       disk_size_gb: "128"
       disk_iops: "12000"
       disk_throughput_mibps: "500"
-    pricing:
       db_instance_type: db-custom-N4-16-65536
       disk_type: HYPERDISK_BALANCED
   - tier: 4xlarge
     bound_type: compute
     variant: performance-optimized
     set:
-      project_size: 4xlarge
       warehouses: "256"
       threads: "1,2,4,8,16,32,64,96"
       instance_type: c4a-standard-16
       disk_size_gb: "128"
       disk_iops: "20000"
       disk_throughput_mibps: "600"
-    pricing:
       db_instance_type: db-custom-N4-16-65536
       disk_type: HYPERDISK_BALANCED
   # 8xlarge: db-custom-N4-32-131072 (32 vCPU / 128 GB, matches RDS's
   # db.m6g.8xlarge), 1024 GB disk, 40,000 IOPS / 1,188 MiB/s (Supabase's
-  # documented 8XL baseline), size_map default, no override needed.
+  # documented 8XL baseline).
   - tier: 8xlarge
     bound_type: io
     set:
-      project_size: 8xlarge
       warehouses: "5120"
       threads: "1,2,4,8,16,32,64,128,192"
       instance_type: c4a-standard-32
       disk_size_gb: "1024"
       disk_iops: "40000"
       disk_throughput_mibps: "1188"
-    pricing:
       db_instance_type: db-custom-N4-32-131072
       disk_type: HYPERDISK_BALANCED
   # 2026-09-02 correction: disk_size_gb/disk_iops/disk_throughput_mibps were
@@ -334,27 +307,23 @@ test_points:
     bound_type: compute
     variant: cost-optimized
     set:
-      project_size: 8xlarge
       warehouses: "512"
       threads: "1,2,4,8,16,32,64,128,192"
       instance_type: c4a-standard-32
       disk_size_gb: "256"
       disk_iops: "12000"
       disk_throughput_mibps: "500"
-    pricing:
       db_instance_type: db-custom-N4-32-131072
       disk_type: HYPERDISK_BALANCED
   - tier: 8xlarge
     bound_type: compute
     variant: performance-optimized
     set:
-      project_size: 8xlarge
       warehouses: "512"
       threads: "1,2,4,8,16,32,64,128,192"
       instance_type: c4a-standard-32
       disk_size_gb: "256"
       disk_iops: "40000"
       disk_throughput_mibps: "1200"
-    pricing:
       db_instance_type: db-custom-N4-32-131072
       disk_type: HYPERDISK_BALANCED

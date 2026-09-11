@@ -21,7 +21,7 @@ test_points:
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_type: "gp3"
-      threads: "1,2,4,8,12"
+      client_threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
   - tier: small
     bound_type: compute
@@ -33,7 +33,7 @@ test_points:
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_throughput_mibps: "125"
-      threads: "1,2,4,8,12"
+      client_threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
   - tier: medium
     bound_type: io
@@ -46,7 +46,7 @@ test_points:
       disk_iops: "3000"
       disk_throughput_mibps: "125"
       disk_type: "gp3"
-      threads: "1,2,4,8,12"
+      client_threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
   - tier: medium
     bound_type: compute
@@ -58,7 +58,7 @@ test_points:
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_throughput_mibps: "125"
-      threads: "1,2,4,8,12"
+      client_threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
   - tier: large
     bound_type: io
@@ -71,7 +71,7 @@ test_points:
       disk_iops: "3000"
       disk_throughput_mibps: "125"
       disk_type: "gp3"
-      threads: "1,2,4,8,12"
+      client_threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
   - tier: large
     bound_type: compute
@@ -83,7 +83,7 @@ test_points:
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_throughput_mibps: "125"
-      threads: "1,2,4,8,12"
+      client_threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
   - tier: xlarge
     bound_type: io
@@ -96,7 +96,7 @@ test_points:
       disk_iops: "12000"
       disk_throughput_mibps: "149"
       disk_type: "gp3"
-      threads: "1,2,4,8,16,24"
+      client_threads: "1,2,4,8,16,24"
       instance_type: c8gd.xlarge
   - tier: xlarge
     bound_type: compute
@@ -108,7 +108,7 @@ test_points:
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_throughput_mibps: "125"
-      threads: "1,2,4,8,16,24"
+      client_threads: "1,2,4,8,16,24"
       instance_type: c8gd.xlarge
   - tier: 2xlarge
     bound_type: io
@@ -121,7 +121,7 @@ test_points:
       disk_iops: "12000"
       disk_throughput_mibps: "297"
       disk_type: "gp3"
-      threads: "1,2,4,8,16,32,48"
+      client_threads: "1,2,4,8,16,32,48"
       instance_type: c8gd.2xlarge
   - tier: 2xlarge
     bound_type: compute
@@ -134,7 +134,7 @@ test_points:
       disk_size_gb: "64"
       disk_iops: "6000"
       disk_throughput_mibps: "250"
-      threads: "1,2,4,8,16,32,48"
+      client_threads: "1,2,4,8,16,32,48"
       instance_type: c8gd.2xlarge
   - tier: 2xlarge
     bound_type: compute
@@ -147,7 +147,7 @@ test_points:
       disk_size_gb: "64"
       disk_iops: "12000"
       disk_throughput_mibps: "300"
-      threads: "1,2,4,8,16,32,48"
+      client_threads: "1,2,4,8,16,32,48"
       instance_type: c8gd.2xlarge
   - tier: 4xlarge
     bound_type: io
@@ -160,7 +160,7 @@ test_points:
       disk_iops: "20000"
       disk_throughput_mibps: "594"
       disk_type: "gp3"
-      threads: "1,2,4,8,16,32,64,96"
+      client_threads: "1,2,4,8,16,32,64,96"
       instance_type: c8gd.4xlarge
   - tier: 4xlarge
     bound_type: compute
@@ -173,7 +173,7 @@ test_points:
       disk_size_gb: "128"
       disk_iops: "12000"
       disk_throughput_mibps: "500"
-      threads: "1,2,4,8,16,32,64,96"
+      client_threads: "1,2,4,8,16,32,64,96"
       instance_type: c8gd.4xlarge
   - tier: 4xlarge
     bound_type: compute
@@ -186,7 +186,7 @@ test_points:
       disk_size_gb: "128"
       disk_iops: "20000"
       disk_throughput_mibps: "600"
-      threads: "1,2,4,8,16,32,64,96"
+      client_threads: "1,2,4,8,16,32,64,96"
       instance_type: c8gd.4xlarge
   - tier: 8xlarge
     bound_type: io
@@ -199,7 +199,7 @@ test_points:
       disk_iops: "40000"
       disk_throughput_mibps: "1188"
       disk_type: "gp3"
-      threads: "1,2,4,8,16,32,64,128,192"
+      client_threads: "1,2,4,8,16,32,64,128,192"
       instance_type: c8gd.8xlarge
   - tier: 8xlarge
     bound_type: compute
@@ -212,7 +212,7 @@ test_points:
       disk_size_gb: "256"
       disk_iops: "12000"
       disk_throughput_mibps: "500"
-      threads: "1,2,4,8,16,32,64,128,192"
+      client_threads: "1,2,4,8,16,32,64,128,192"
       instance_type: c8gd.8xlarge
   - tier: 8xlarge
     bound_type: compute
@@ -225,5 +225,5 @@ test_points:
       disk_size_gb: "256"
       disk_iops: "40000"
       disk_throughput_mibps: "1200"
-      threads: "1,2,4,8,16,32,64,128,192"
+      client_threads: "1,2,4,8,16,32,64,128,192"
       instance_type: c8gd.8xlarge

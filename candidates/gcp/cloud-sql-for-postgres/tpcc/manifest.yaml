@@ -60,7 +60,7 @@ test_points:
     bound_type: io
     set:
       warehouses: "160"
-      threads: "1,2,4,8,12"
+      client_threads: "1,2,4,8,12"
       instance_type: c4a-standard-4
       disk_size_gb: "32"
       disk_iops: "3000"
@@ -74,7 +74,7 @@ test_points:
     bound_type: compute
     set:
       warehouses: "16"
-      threads: "1,2,4,8,12"
+      client_threads: "1,2,4,8,12"
       instance_type: c4a-standard-4
       disk_size_gb: "20"
       disk_iops: "3000"
@@ -91,7 +91,7 @@ test_points:
     bound_type: io
     set:
       warehouses: "320"
-      threads: "1,2,4,8,12"
+      client_threads: "1,2,4,8,12"
       instance_type: c4a-standard-4
       disk_size_gb: "64"
       disk_iops: "3000"
@@ -107,7 +107,7 @@ test_points:
     bound_type: compute
     set:
       warehouses: "32"
-      threads: "1,2,4,8,12"
+      client_threads: "1,2,4,8,12"
       instance_type: c4a-standard-4
       disk_size_gb: "20"
       disk_iops: "3000"
@@ -126,7 +126,7 @@ test_points:
     bound_type: io
     set:
       warehouses: "640"
-      threads: "1,2,4,8,16,24"
+      client_threads: "1,2,4,8,16,24"
       instance_type: c4a-standard-4
       disk_size_gb: "128"
       disk_iops: "12000"
@@ -153,7 +153,7 @@ test_points:
     bound_type: compute
     set:
       warehouses: "64"
-      threads: "1,2,4,8,16,24"
+      client_threads: "1,2,4,8,16,24"
       instance_type: c4a-standard-4
       disk_size_gb: "20"
       disk_iops: "3000"
@@ -167,7 +167,7 @@ test_points:
     bound_type: io
     set:
       warehouses: "1280"
-      threads: "1,2,4,8,16,32,48"
+      client_threads: "1,2,4,8,16,32,48"
       instance_type: c4a-standard-8
       disk_size_gb: "256"
       disk_iops: "12000"
@@ -197,7 +197,7 @@ test_points:
     variant: cost-optimized
     set:
       warehouses: "128"
-      threads: "1,2,4,8,16,32,48"
+      client_threads: "1,2,4,8,16,32,48"
       instance_type: c4a-standard-8
       disk_size_gb: "64"
       disk_iops: "6000"
@@ -209,7 +209,7 @@ test_points:
     variant: performance-optimized
     set:
       warehouses: "128"
-      threads: "1,2,4,8,16,32,48"
+      client_threads: "1,2,4,8,16,32,48"
       instance_type: c4a-standard-8
       disk_size_gb: "64"
       disk_iops: "12000"
@@ -223,7 +223,7 @@ test_points:
     bound_type: io
     set:
       warehouses: "2560"
-      threads: "1,2,4,8,16,32,64,96"
+      client_threads: "1,2,4,8,16,32,64,96"
       instance_type: c4a-standard-16
       disk_size_gb: "512"
       disk_iops: "20000"
@@ -250,7 +250,7 @@ test_points:
     variant: cost-optimized
     set:
       warehouses: "256"
-      threads: "1,2,4,8,16,32,64,96"
+      client_threads: "1,2,4,8,16,32,64,96"
       instance_type: c4a-standard-16
       disk_size_gb: "128"
       disk_iops: "12000"
@@ -262,7 +262,7 @@ test_points:
     variant: performance-optimized
     set:
       warehouses: "256"
-      threads: "1,2,4,8,16,32,64,96"
+      client_threads: "1,2,4,8,16,32,64,96"
       instance_type: c4a-standard-16
       disk_size_gb: "128"
       disk_iops: "20000"
@@ -276,7 +276,7 @@ test_points:
     bound_type: io
     set:
       warehouses: "5120"
-      threads: "1,2,4,8,16,32,64,128,192"
+      client_threads: "1,2,4,8,16,32,64,128,192"
       instance_type: c4a-standard-32
       disk_size_gb: "1024"
       disk_iops: "40000"
@@ -308,7 +308,7 @@ test_points:
     variant: cost-optimized
     set:
       warehouses: "512"
-      threads: "1,2,4,8,16,32,64,128,192"
+      client_threads: "1,2,4,8,16,32,64,128,192"
       instance_type: c4a-standard-32
       disk_size_gb: "256"
       disk_iops: "12000"
@@ -320,7 +320,7 @@ test_points:
     variant: performance-optimized
     set:
       warehouses: "512"
-      threads: "1,2,4,8,16,32,64,128,192"
+      client_threads: "1,2,4,8,16,32,64,128,192"
       instance_type: c4a-standard-32
       disk_size_gb: "256"
       disk_iops: "40000"

@@ -48,7 +48,7 @@ test_points:
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_type: "gp3"
-      threads: "1,2,4,8,12"
+      client_threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
   # 2026-09-02: disk_throughput_mibps=125 added explicitly on every compute-bound row below
   # (small/medium/large/xlarge) -- previously left unset, relying on the platform silently
@@ -63,7 +63,7 @@ test_points:
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_throughput_mibps: "125"
-      threads: "1,2,4,8,12"
+      client_threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
   # medium: documented baseline (2,000) is also below the gp3 floor -- same
   # "matched (only achievable)" situation as small.
@@ -78,7 +78,7 @@ test_points:
       disk_iops: "3000"
       disk_throughput_mibps: "125"
       disk_type: "gp3"
-      threads: "1,2,4,8,12"
+      client_threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
   # 2026-09-02 correction: disk_size_gb was "32" (io-bound's value) -- compute-bound's dataset at
   # 16 warehouses is tiny, so this drops to the 20 GB floor per
@@ -95,7 +95,7 @@ test_points:
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_throughput_mibps: "125"
-      threads: "1,2,4,8,12"
+      client_threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
   # large: normalized to 3,000 IOPS / 125 MB/s across all three platforms
   # (Supabase/RDS/GCP) -- see docs/disk-sizing-formula-2026-09.md in benchctl.
@@ -116,7 +116,7 @@ test_points:
       disk_iops: "3000"
       disk_throughput_mibps: "125"
       disk_type: "gp3"
-      threads: "1,2,4,8,12"
+      client_threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
   # 2026-09-02 correction: disk_size_gb was "64" (io-bound's value) -- drops to the 20 GB floor
   # per docs/compute-bound-sizing-formula-2026-09.md (2x8=16, floored to 20). Accepted by
@@ -131,7 +131,7 @@ test_points:
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_throughput_mibps: "125"
-      threads: "1,2,4,8,12"
+      client_threads: "1,2,4,8,12"
       instance_type: c8gd.xlarge
   # xlarge: 12,000 IOPS, matching RDS's floor at 400 GiB and now GCP's config
   # too (all three platforms aligned here -- see
@@ -166,7 +166,7 @@ test_points:
       disk_iops: "12000"
       disk_throughput_mibps: "149"
       disk_type: "gp3"
-      threads: "1,2,4,8,16,24"
+      client_threads: "1,2,4,8,16,24"
       instance_type: c8gd.xlarge
   # disk_size_gb=20 (not the docs/compute-bound-sizing-formula-2026-09.md formula's 32 GB
   # 2xRAM_GiB value) is intentional -- live-tested and passed comfortably at 64
@@ -182,7 +182,7 @@ test_points:
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_throughput_mibps: "125"
-      threads: "1,2,4,8,16,24"
+      client_threads: "1,2,4,8,16,24"
       instance_type: c8gd.xlarge
   # 2xlarge: own tier disk size (256 GB, well below RDS's 400 GiB
   # custom-IOPS threshold, but Supabase's IOPS isn't gated by disk size the
@@ -211,7 +211,7 @@ test_points:
       disk_iops: "12000"
       disk_throughput_mibps: "297"
       disk_type: "gp3"
-      threads: "1,2,4,8,16,32,48"
+      client_threads: "1,2,4,8,16,32,48"
       instance_type: c8gd.2xlarge
   # 2026-09-02 correction: disk_size_gb was "40", disk_iops "3000" -- both replaced following
   # docs/compute-bound-sizing-formula-2026-09.md's live-tested Config (§2.3): flat 3,000 IOPS
@@ -231,7 +231,7 @@ test_points:
       disk_size_gb: "64"
       disk_iops: "6000"
       disk_throughput_mibps: "250"
-      threads: "1,2,4,8,16,32,48"
+      client_threads: "1,2,4,8,16,32,48"
       instance_type: c8gd.2xlarge
   # performance-optimized: matches the io-bound row above's iops (12,000); throughput rounded to
   # 300 (io-bound's own documented-baseline value is 297) and aligned with GCP's identical
@@ -247,7 +247,7 @@ test_points:
       disk_size_gb: "64"
       disk_iops: "12000"
       disk_throughput_mibps: "300"
-      threads: "1,2,4,8,16,32,48"
+      client_threads: "1,2,4,8,16,32,48"
       instance_type: c8gd.2xlarge
   # 4xlarge: own tier disk size (512 GB) with disk_iops matched to the
   # documented 4XL baseline. Compute-bound uses a right-sized disk (80 GB)
@@ -271,7 +271,7 @@ test_points:
       disk_iops: "20000"
       disk_throughput_mibps: "594"
       disk_type: "gp3"
-      threads: "1,2,4,8,16,32,64,96"
+      client_threads: "1,2,4,8,16,32,64,96"
       instance_type: c8gd.4xlarge
   # 2026-09-02 correction: disk_size_gb was "80", disk_iops "3000" -- replaced per
   # docs/compute-bound-sizing-formula-2026-09.md §2.5/§3. disk_size_gb=128 is 2xRAM_GiB;
@@ -290,7 +290,7 @@ test_points:
       disk_size_gb: "128"
       disk_iops: "12000"
       disk_throughput_mibps: "500"
-      threads: "1,2,4,8,16,32,64,96"
+      client_threads: "1,2,4,8,16,32,64,96"
       instance_type: c8gd.4xlarge
   # performance-optimized: matches the io-bound row above's iops/throughput (20,000/600,
   # rounded down from the io-bound row's own documented 594), aligned with GCP's identical
@@ -306,7 +306,7 @@ test_points:
       disk_size_gb: "128"
       disk_iops: "20000"
       disk_throughput_mibps: "600"
-      threads: "1,2,4,8,16,32,64,96"
+      client_threads: "1,2,4,8,16,32,64,96"
       instance_type: c8gd.4xlarge
   # 8xlarge: own tier disk size (1024 GB) with disk_iops matched to the
   # documented 8XL baseline. Compute-bound uses a right-sized disk (160 GB)
@@ -328,7 +328,7 @@ test_points:
       disk_iops: "40000"
       disk_throughput_mibps: "1188"
       disk_type: "gp3"
-      threads: "1,2,4,8,16,32,64,128,192"
+      client_threads: "1,2,4,8,16,32,64,128,192"
       instance_type: c8gd.8xlarge
   # 2026-09-02 correction: disk_size_gb was "160", disk_iops "3000" -- both ruled out per
   # docs/compute-bound-sizing-formula-2026-09.md §2.4 (Configs A/B: disk-throughput-bound, not
@@ -348,7 +348,7 @@ test_points:
       disk_size_gb: "256"
       disk_iops: "12000"
       disk_throughput_mibps: "500"
-      threads: "1,2,4,8,16,32,64,128,192"
+      client_threads: "1,2,4,8,16,32,64,128,192"
       instance_type: c8gd.8xlarge
   # performance-optimized: matches the io-bound row above's iops/throughput (40,000/1200,
   # rounded up from the io-bound row's own documented 1188) -- this is the tier where the
@@ -365,5 +365,5 @@ test_points:
       disk_size_gb: "256"
       disk_iops: "40000"
       disk_throughput_mibps: "1200"
-      threads: "1,2,4,8,16,32,64,128,192"
+      client_threads: "1,2,4,8,16,32,64,128,192"
       instance_type: c8gd.8xlarge

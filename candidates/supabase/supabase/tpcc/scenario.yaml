@@ -55,11 +55,11 @@ inputs:
   prepare_threads:
     type: int
     default: 12
-  threads:
+  client_threads:
     type: list
     # Thread-count sweep for the benchmark (suite.fixtures below), not to be
     # confused with prepare_threads (data-load concurrency). Override with
-    # --set threads=1,2,4,8,16,24.
+    # --set client_threads=1,2,4,8,16,24.
     default: [1, 2, 4, 8, 16, 24]
   duration:
     type: duration
@@ -67,16 +67,10 @@ inputs:
   warmup_duration:
     type: duration
     default: 5m
-  wal_catchup_timeout_secs:
+  wal_settle_duration_secs:
     type: int
-    # Bounds the wait-for-archiver-catchup step below. See its comment and
-    # docs/supabase-vs-rds-benchmark.md for the 2026-07-16/17 incidents this
-    # addresses. A fixed absolute WAL-size threshold (tried first) turned out
-    # to be the wrong check: healthy, fully-caught-up archiving still leaves
-    # ~4GB of WAL sitting on disk as Postgres's normal steady-state retention
-    # baseline, unrelated to whether archiving is keeping up. The step now
-    # waits for the WAL directory to stop *growing* between samples instead.
     default: 720
+    description: Pause time after the initial data load to allow for cooldown
   instance_type:
     type: string
     # Load driver (EC2) instance type, independent of the target's
@@ -91,7 +85,7 @@ inputs:
   metrics_enabled:
     type: bool
     default: false
-  metrics_host_scrape_interval_secs:
+  metrics_interval_secs:
     type: int
     default: 5
 target:
@@ -114,10 +108,10 @@ target:
 suite:
   iterations: 1
   fixtures:
-    - threads:
+    - client_threads:
         type: list
         params:
-          values: "{{ inputs.threads }}"
+          values: "{{ inputs.client_threads }}"
   benchmarks:
     - name: supabase
       steps:
@@ -169,81 +163,11 @@ suite:
             threads: "{{ inputs.prepare_threads }}"
             no-check: ""
             dropdata: ""
-        - name: wait-for-archiver-catchup
-          # Guards against the 2026-07-16 incident: the prepare-phase bulk
-          # load can generate WAL faster than WAL-G's archive_command can
-          # ship it (confirmed live: 8 GB data + 12 GB stuck WAL == a 20 GB
-          # disk, at which point Supabase flips the project read-only to
-          # protect against a full-disk crash). This is one PL/pgSQL DO block
-          # so it needs no client tooling beyond the standard "sql" step —
-          # pg_ls_waldir() and pg_sleep() both work against the normal
-          # connection role (verified live via `supabase db query --linked`).
-          #
-          # The check is growth-based, not an absolute threshold: an earlier
-          # version waited for pg_ls_waldir() to drop below a fixed 2GB and
-          # reliably timed out even on perfectly healthy archiving
-          # (archived_count climbing, failed_count 0) — ~4GB of WAL sitting
-          # on disk turned out to be Postgres's normal steady-state retention
-          # baseline on this platform, unrelated to whether archiving is
-          # keeping up. What actually matters (per the original incident) is
-          # whether the backlog is *growing without bound*, not its absolute
-          # size. So this samples pg_ls_waldir() twice, wal_sample_interval_secs
-          # apart, and succeeds once it stops growing (stable or shrinking).
-          # An immediate hard-fail guard still aborts right away, without
-          # waiting out the full timeout, if the backlog ever exceeds 80% of
-          # disk_size_gb — a genuinely critical disk shouldn't wait around
-          # hoping it stabilizes.
-          #
-          # Fails loudly (RAISE EXCEPTION) rather than silently proceeding
-          # over a still-critical/still-growing disk if neither condition is
-          # met within wal_catchup_timeout_secs. Doesn't run during the
-          # measured window, so it can't distort the tpmC result — but
-          # doesn't guarantee the sustained run phase itself won't rebuild
-          # backlog; see the doc's residual-risk caveat.
-          #
-          # SET statement_timeout = 0 is required: this project's default is
-          # 2 minutes, which cancels the DO block outright (SQLSTATE 57014)
-          # long before either its own exit condition or wal_catchup_timeout_secs
-          # ever gets evaluated — confirmed live (2026-07-16) that this SET,
-          # sent as a separate statement ahead of the DO block over the same
-          # session, lets the block run past the 2-minute mark without being
-          # killed. Scoped to this one connection/step only (a fresh pgx
-          # connection per "sql" step, per internal/engine/sql.go), not a
-          # persistent project-wide config change.
-          type: sql
+        - name: wal-settle-pause
+          # wait for a while to let the system cool down after the batch load
+          type: shell
           args:
-            query: >-
-              SET statement_timeout = 0;
-
-              DO $$ DECLARE
-
-
-
-
-                deadline timestamptz := clock_timestamp() + make_interval(secs => {{ inputs.wal_catchup_timeout_secs }});
-                sample_interval_secs constant int := 30;
-                hard_ceiling_bytes bigint := ({{ inputs.disk_size_gb }} * 0.8)::bigint * 1024 * 1024 * 1024;
-                prev_bytes bigint;
-                cur_bytes bigint;
-              BEGIN
-
-
-
-
-                SELECT COALESCE(sum(size), 0) INTO prev_bytes FROM pg_ls_waldir();
-                LOOP
-                  IF prev_bytes > hard_ceiling_bytes THEN
-                    RAISE EXCEPTION 'wal-catchup: WAL backlog % bytes exceeds % byte hard ceiling (80%% of disk_size_gb) -- disk critically full, aborting rather than waiting', prev_bytes, hard_ceiling_bytes;
-                  END IF;
-                  PERFORM pg_sleep(sample_interval_secs);
-                  SELECT COALESCE(sum(size), 0) INTO cur_bytes FROM pg_ls_waldir();
-                  EXIT WHEN cur_bytes <= prev_bytes;
-                  IF clock_timestamp() > deadline THEN
-                    RAISE EXCEPTION 'wal-catchup: WAL backlog still growing (% -> % bytes over %s seconds) after % total seconds -- archiver may be stuck', prev_bytes, cur_bytes, sample_interval_secs, {{ inputs.wal_catchup_timeout_secs }};
-                  END IF;
-                  prev_bytes := cur_bytes;
-                END LOOP;
-              END $$;
+            command: "sleep {{ inputs.wal_settle_duration_secs }}"
         - name: warm-up
           # Discarded: workloadMetrics is overwritten by the next (measured)
           # go-tpc run step below, so this only serves to bring the connection
@@ -252,16 +176,28 @@ suite:
           command: run
           args:
             warehouses: "{{ inputs.warehouses }}"
-            threads: "{{ fixture.threads }}"
+            threads: "{{ fixture.client_threads }}"
             time: "{{ inputs.warmup_duration }}"
         - name: benchmark
           type: go-tpc
           command: run
           args:
             warehouses: "{{ inputs.warehouses }}"
-            threads: "{{ fixture.threads }}"
+            threads: "{{ fixture.client_threads }}"
             time: "{{ inputs.duration }}"
             interval: "1s"
+        - name: get-db-size
+          type: metadata
+          command: sql
+          args:
+            name: db_size
+            query: "SELECT pg_size_pretty(pg_database_size(current_database()))"
+        - name: get-wal-size
+          type: metadata
+          command: sql
+          args:
+            name: wal_size
+            query: "SELECT pg_size_pretty(COALESCE(sum(size), 0)) FROM pg_ls_waldir()"
 driver:
   provider: ec2
   config:
@@ -270,8 +206,8 @@ driver:
       instance_type: "{{ inputs.instance_type }}"
       region: "{{ inputs.region }}"
       vector_enabled: "{{ inputs.metrics_enabled }}"
-      vector_sink: "{{ inputs.collector }}"
-      vector_host_metrics_scrape_interval_secs: "{{ inputs.metrics_host_scrape_interval_secs }}"
+      vector_sink: stdout
+      vector_host_metrics_scrape_interval_secs: "{{ inputs.metrics_interval_secs }}"
       tags:
         created-by: benchctl
 collector:

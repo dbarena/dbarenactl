@@ -51,11 +51,11 @@ inputs:
   prepare_threads:
     type: int
     default: 12
-  threads:
+  client_threads:
     type: list
     # Thread-count sweep for the benchmark (suite.fixtures below), not to be
     # confused with prepare_threads (data-load concurrency). Override with
-    # --set threads=1,2,4,8,16,24.
+    # --set client_threads=1,2,4,8,16,24.
     default: [1, 2, 4, 8, 16, 24]
   duration:
     type: duration
@@ -88,7 +88,7 @@ inputs:
   metrics_enabled:
     type: bool
     default: false
-  metrics_host_scrape_interval_secs:
+  metrics_interval_secs:
     type: int
     default: 5
 target:
@@ -121,10 +121,10 @@ target:
 suite:
   iterations: 1
   fixtures:
-    - threads:
+    - client_threads:
         type: list
         params:
-          values: "{{ inputs.threads }}"
+          values: "{{ inputs.client_threads }}"
   benchmarks:
     - name: gcp-cloudsql
       steps:
@@ -177,7 +177,7 @@ suite:
             no-check: ""
             dropdata: ""
         - name: wal-settle-pause
-          # See wal_settle_duration_secs above.
+          # wait for a while to let the system cool down after the batch load
           type: shell
           args:
             command: "sleep {{ inputs.wal_settle_duration_secs }}"
@@ -189,14 +189,14 @@ suite:
           command: run
           args:
             warehouses: "{{ inputs.warehouses }}"
-            threads: "{{ fixture.threads }}"
+            threads: "{{ fixture.client_threads }}"
             time: "{{ inputs.warmup_duration }}"
         - name: benchmark
           type: go-tpc
           command: run
           args:
             warehouses: "{{ inputs.warehouses }}"
-            threads: "{{ fixture.threads }}"
+            threads: "{{ fixture.client_threads }}"
             time: "{{ inputs.duration }}"
             interval: "1s"
         - name: get-db-size
@@ -224,8 +224,8 @@ driver:
       subnetwork: "{{ target.outputs.subnetwork }}"
       zone: "{{ target.outputs.zone }}"
       vector_enabled: "{{ inputs.metrics_enabled }}"
-      vector_sink: "{{ inputs.collector }}"
-      vector_host_metrics_scrape_interval_secs: "{{ inputs.metrics_host_scrape_interval_secs }}"
+      vector_sink: stdout
+      vector_host_metrics_scrape_interval_secs: "{{ inputs.metrics_interval_secs }}"
       tags:
         created-by: benchctl
 collector:

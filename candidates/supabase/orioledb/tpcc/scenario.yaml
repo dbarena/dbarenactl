@@ -58,11 +58,11 @@ inputs:
   prepare_threads:
     type: int
     default: 12
-  threads:
+  client_threads:
     type: list
     # Thread-count sweep for the benchmark (suite.fixtures below), not to be
     # confused with prepare_threads (data-load concurrency). Override with
-    # --set threads=1,2,4,8,16,24.
+    # --set client_threads=1,2,4,8,16,24.
     default: [1, 2, 4, 8, 16, 24]
   duration:
     type: duration
@@ -72,17 +72,8 @@ inputs:
     default: 5m
   wal_settle_duration_secs:
     type: int
-    # OrioleDB counterpart of scenarios/rds-tpcc-tiers.yaml's
-    # wal_settle_duration_secs -- a fixed settle pause, not a poll. The
-    # vanilla Supabase scenario's wait-for-archiver-catchup step instead
-    # polls pg_ls_waldir() until it stops growing, which assumes core
-    # Postgres's heap-AM WAL/archiving behavior; OrioleDB's own undo log and
-    # storage engine work differently enough that this scenario doesn't rely
-    # on that assumption, and just waits a fixed duration instead, same as
-    # the RDS scenario does for its own (unrelated) reason of having no
-    # pollable archive_command signal at all. See that scenario's own
-    # comment for the fuller rationale on the "fixed pause vs. poll" choice.
     default: 720
+    description: Pause time after the initial data load to allow for cooldown
   instance_type:
     type: string
     # Load driver (EC2) instance type, independent of the target's
@@ -97,7 +88,7 @@ inputs:
   metrics_enabled:
     type: bool
     default: false
-  metrics_host_scrape_interval_secs:
+  metrics_interval_secs:
     type: int
     default: 5
 target:
@@ -121,10 +112,10 @@ target:
 suite:
   iterations: 1
   fixtures:
-    - threads:
+    - client_threads:
         type: list
         params:
-          values: "{{ inputs.threads }}"
+          values: "{{ inputs.client_threads }}"
   benchmarks:
     - name: orioledb
       steps:
@@ -187,10 +178,7 @@ suite:
             no-check: ""
             dropdata: ""
         - name: wal-settle-pause
-          # See wal_settle_duration_secs above -- fixed pause rather than the
-          # vanilla Supabase scenario's pg_ls_waldir()-polling
-          # wait-for-archiver-catchup step, since OrioleDB's own storage
-          # engine/undo log doesn't share the assumptions that poll relies on.
+          # wait for a while to let the system cool down after the batch load
           type: shell
           args:
             command: "sleep {{ inputs.wal_settle_duration_secs }}"
@@ -202,9 +190,9 @@ suite:
           command: run
           args:
             warehouses: "{{ inputs.warehouses }}"
-            threads: "{{ fixture.threads }}"
+            threads: "{{ fixture.client_threads }}"
             time: "{{ inputs.warmup_duration }}"
-        - name: wal-stats-before-benchmark
+        - name: get-wal-size-before-benchmark
           # Disk-sizing signal (see docs/compute-bound-calibration-plan-2026-09.md §9/§11 and
           # docs/compute-bound-sizing-formula-2026-09.md §5-7). pg_stat_wal is still valid for
           # OrioleDB -- WAL generation is a core Postgres mechanism this engine still uses --
@@ -218,10 +206,10 @@ suite:
           type: metadata
           command: sql
           args:
-            name: wal_stats_before
+            name: wal_size_before
             query: >-
               SELECT 'wal_bytes=' || wal_bytes FROM pg_stat_wal
-        - name: orioledb-footprint-before-benchmark
+        - name: get-db-size-before-benchmark
           # OrioleDB-specific disk-size signal, standing in for the standard
           # pg_stat_io/pg_stat_checkpointer/pg_stat_database views this scenario deliberately
           # does NOT query: a 2026-09-04 full-30-minute-duration run confirmed those three
@@ -238,7 +226,7 @@ suite:
           type: metadata
           command: sql
           args:
-            name: orioledb_footprint_before
+            name: db_size_before
             query: >-
               SELECT 'total_bytes=' || (pg_database_size(current_database()) + (SELECT COALESCE(sum(size), 0) FROM pg_ls_waldir()) + (SELECT COALESCE(sum(undo_size), 0) FROM orioledb_undo_size()))::bigint
         - name: benchmark
@@ -246,21 +234,21 @@ suite:
           command: run
           args:
             warehouses: "{{ inputs.warehouses }}"
-            threads: "{{ fixture.threads }}"
+            threads: "{{ fixture.client_threads }}"
             time: "{{ inputs.duration }}"
             interval: "1s"
-        - name: wal-stats-after-benchmark
+        - name: get-wal-size-after-benchmark
           type: metadata
           command: sql
           args:
-            name: wal_stats_after
+            name: wal_size_after
             query: >-
               SELECT 'wal_bytes=' || wal_bytes FROM pg_stat_wal
-        - name: orioledb-footprint-after-benchmark
+        - name: get-db-size-after-benchmark
           type: metadata
           command: sql
           args:
-            name: orioledb_footprint_after
+            name: db_size_after
             query: >-
               SELECT 'total_bytes=' || (pg_database_size(current_database()) + (SELECT COALESCE(sum(size), 0) FROM pg_ls_waldir()) + (SELECT COALESCE(sum(undo_size), 0) FROM orioledb_undo_size()))::bigint
 driver:
@@ -271,8 +259,8 @@ driver:
       instance_type: "{{ inputs.instance_type }}"
       region: "{{ inputs.region }}"
       vector_enabled: "{{ inputs.metrics_enabled }}"
-      vector_sink: "{{ inputs.collector }}"
-      vector_host_metrics_scrape_interval_secs: "{{ inputs.metrics_host_scrape_interval_secs }}"
+      vector_sink: stdout
+      vector_host_metrics_scrape_interval_secs: "{{ inputs.metrics_interval_secs }}"
       tags:
         created-by: benchctl
 collector:

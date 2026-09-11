@@ -53,7 +53,7 @@ inputs:
     type: int
     default: 12
     description: Number of clients for data loading
-  threads:
+  client_threads:
     type: list
     default: [1, 2, 4, 8, 16, 24]
     description: Number of clients for the actual benchmark
@@ -99,10 +99,10 @@ target:
 suite:
   iterations: 1
   fixtures:
-    - threads:
+    - client_threads:
         type: list
         params:
-          values: "{{ inputs.threads }}"
+          values: "{{ inputs.client_threads }}"
   benchmarks:
     - name: rds
       steps:
@@ -150,6 +150,7 @@ suite:
             no-check: ""
             dropdata: ""
         - name: wal-settle-pause
+          # wait for a while to let the system cool down after the batch load
           type: shell
           args:
             command: "sleep {{ inputs.wal_settle_duration_secs }}"
@@ -161,16 +162,28 @@ suite:
           command: run
           args:
             warehouses: "{{ inputs.warehouses }}"
-            threads: "{{ fixture.threads }}"
+            threads: "{{ fixture.client_threads }}"
             time: "{{ inputs.warmup_duration }}"
         - name: benchmark
           type: go-tpc
           command: run
           args:
             warehouses: "{{ inputs.warehouses }}"
-            threads: "{{ fixture.threads }}"
+            threads: "{{ fixture.client_threads }}"
             time: "{{ inputs.duration }}"
             interval: "1s"
+        - name: get-db-size
+          type: metadata
+          command: sql
+          args:
+            name: db_size
+            query: "SELECT pg_size_pretty(pg_database_size(current_database()))"
+        - name: get-wal-size
+          type: metadata
+          command: sql
+          args:
+            name: wal_size
+            query: "SELECT pg_size_pretty(COALESCE(sum(size), 0)) FROM pg_ls_waldir()"
 driver:
   provider: ec2
   config:

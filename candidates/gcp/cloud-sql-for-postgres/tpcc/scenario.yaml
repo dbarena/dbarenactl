@@ -13,56 +13,70 @@ inputs:
     # project id in the scenario. Set via --set project_id=... only to
     # override that resolution for a one-off run.
     default: ""
+    description: GCP project ID to use
   db_instance_type:
     type: string
     default: "db-custom-N4-2-4096"
+    description: Cloud SQL instance machine type
   disk_type:
     type: string
     # Only "HYPERDISK_BALANCED" is valid -- required by the N4 machine
     # series (PD_SSD isn't valid with N4).
     default: "HYPERDISK_BALANCED"
+    description: Cloud SQL disk type
   engine_version:
     type: string
     # Cloud SQL only accepts a major-version enum (no minor-version pinning
     # like RDS's "17.10") -- see deployments/gcp-cloudsql/postgres/variables.tf
     # for where to look up currently valid values.
     default: "POSTGRES_17"
+    description: Postgres version to use
   pg_user:
     type: string
     default: "bench"
+    description: Postgres user name
   pg_password:
     type: string
     default: "benchbench"
+    description: Postgres password
   disk_size_gb:
     type: int
     # No sensible default
     required: true
+    description: Disk size in GB
   disk_iops:
     type: int
     # No sensible default
     required: true
+    description: Provisioned IOPS
   disk_throughput_mibps:
     type: int
     # No sensible default
     required: true
+    description: Provisioned disk throughput
   warehouses:
     type: int
     default: 160
+    description: Number of warehouses to simulate
   prepare_threads:
     type: int
     default: 12
+    description: Number of clients for data loading
   client_threads:
     type: list
     # Thread-count sweep for the benchmark (suite.fixtures below), not to be
     # confused with prepare_threads (data-load concurrency). Override with
     # --set client_threads=1,2,4,8,16,24.
     default: [1, 2, 4, 8, 16, 24]
+    description: Number of clients for the actual benchmark
   duration:
     type: duration
     default: 30m
+    description: Duration of the actual benchmark
   warmup_duration:
     type: duration
     default: 5m
+    description: Duration of the warmup phase for the benchmark
   wal_settle_duration_secs:
     type: int
     # Same fixed-pause rationale as the RDS scenario (see
@@ -71,6 +85,7 @@ inputs:
     # archive_command/pg_stat_archiver signal we can poll, so this is a fixed
     # settle pause rather than a real check.
     default: 720
+    description: Pause time after the initial data load to allow for cooldown
   instance_type:
     type: string
     # Load driver (GCE) machine type, independent of the target's
@@ -79,18 +94,23 @@ inputs:
     # driver's own vCPU count doesn't become the bottleneck instead of the
     # target.
     default: c4a-standard-4
+    description: Instance type of the load driver instance
   region:
     type: string
     default: "us-east1"
+    description: GCP region to pick
   zone:
     type: string
     default: "us-east1-b"
+    description: GCP zone to pick
   metrics_enabled:
     type: bool
     default: false
+    description: Whether to capture metrics on the load driver instance
   metrics_interval_secs:
     type: int
     default: 5
+    description: Interval in which to get load test driver metrics
 target:
   provider: opentofu
   config:

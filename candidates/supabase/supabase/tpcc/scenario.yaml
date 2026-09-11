@@ -9,9 +9,11 @@ inputs:
   supabase_org_id:
     type: string
     required: true
+    description: Supabase organization id for the target project
   project_size:
     type: string
     default: small
+    description: Supabase project size
   disk_size_gb:
     type: int
     # Matches the Small tier's target in the RDS scenario's allocated_storage.
@@ -21,6 +23,7 @@ inputs:
     # invocation table in docs/supabase-vs-rds-benchmark.md. 0 disables the
     # resize call entirely (Supabase projects always start at 8 GB).
     default: 20
+    description: Disk size in GB
   disk_iops:
     type: int
     # The compute tier's own documented baseline IOPS, per
@@ -32,6 +35,7 @@ inputs:
     # size_map for the matching RDS-side values (clamped to gp3's 3,000 IOPS
     # floor for Small/Medium, where the docs baseline falls below it).
     default: 1000
+    description: Provisioned IOPS
   disk_throughput_mibps:
     type: int
     # 0 (default) omits throughput_mibps from the disk-config API call
@@ -40,33 +44,41 @@ inputs:
     # explicitly. Ignored when disk_type is io2 (that disk type doesn't
     # accept this attribute).
     default: 0
+    description: Provisioned disk throughput
   disk_type:
     type: string
     # gp3 (default) or io2. gp3 caps out at min(500 IOPS/GB, 16,000);
     # tiers whose disk_iops exceeds that need "io2" instead, which the
     # Management API also supports (up to min(1000 IOPS/GB, 256,000)).
     default: gp3
+    description: Disk type, gp3 or io2
   profile:
     type: string
     default: ""
+    description: Supabase infrastructure profile to target
   warehouses:
     type: int
     default: 80
+    description: Number of warehouses to simulate
   prepare_threads:
     type: int
     default: 12
+    description: Number of clients for data loading
   client_threads:
     type: list
     # Thread-count sweep for the benchmark (suite.fixtures below), not to be
     # confused with prepare_threads (data-load concurrency). Override with
     # --set client_threads=1,2,4,8,16,24.
     default: [1, 2, 4, 8, 16, 24]
+    description: Number of clients for the actual benchmark
   duration:
     type: duration
     default: 30m
+    description: Duration of the actual benchmark
   warmup_duration:
     type: duration
     default: 5m
+    description: Duration of the warmup phase for the benchmark
   wal_settle_duration_secs:
     type: int
     default: 720
@@ -79,15 +91,19 @@ inputs:
     # driver's own vCPU count doesn't become the bottleneck instead of the
     # target.
     default: c8gd.xlarge
+    description: Instance type of the load driver instance
   region:
     type: string
     default: "us-east-1"
+    description: AWS region to pick
   metrics_enabled:
     type: bool
     default: false
+    description: Whether to capture metrics on the load driver instance
   metrics_interval_secs:
     type: int
     default: 5
+    description: Interval in which to get load test driver metrics
 target:
   provider: supabase
   config:

@@ -1,7 +1,6 @@
 # Sweep manifest for `dbarenactl run --candidate=candidates/supabase-tpcc.yaml`.
 #
-# supabase_org_id is a required scenario input (your Supabase org, since a run
-# creates a real, billed production project in it) with no sensible default.
+# supabase_org_id is a required scenario input (your Supabase org).
 #
 # Supply with `dbarenactl run --candidate=candidates/supabase-tpcc.yaml --set supabase_org_id=<your-org-id>`
 #

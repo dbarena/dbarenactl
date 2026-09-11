@@ -34,7 +34,7 @@ product: Supabase
 plan: Pro
 workload: tpcc
 region: us-east-1
-scenario_path: ../../benchctl/scenarios/supabase-tpcc-tiers.yaml
+scenario_path: scenario.yaml
 test_points:
   # small: documented IOPS baseline (1,000) is below gp3's 3,000 floor, so
   # this and RDS's small both land on the same achieved 20 GB / 3,000 IOPS

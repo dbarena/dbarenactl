@@ -47,7 +47,7 @@ provider: AWS
 product: RDS
 workload: tpcc
 region: us-east-1
-scenario_path: ../../benchctl/scenarios/rds-tpcc-tiers.yaml
+scenario_path: scenario.yaml
 test_points:
   # small: db.t4g.small, 20 GB / 3,000 IOPS (default, gp3 floor)
   - tier: small

@@ -47,7 +47,7 @@ product: Cloud SQL for Postgres
 plan: Enterprise
 workload: tpcc
 region: us-east1
-scenario_path: ../../benchctl/scenarios/gcp-cloudsql-tpcc-tiers.yaml
+scenario_path: scenario.yaml
 test_points:
   # medium: db-custom-N4-2-4096 (2 vCPU / 4 GB, matches RDS's db.t4g.medium),
   # 32 GB disk, 3,000 IOPS / 140 MiB/s. Supabase's documented Medium baseline

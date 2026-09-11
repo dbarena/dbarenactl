@@ -1,0 +1,280 @@
+apiVersion: bench/v1
+kind: Scenario
+metadata:
+  name: supabase-tpcc-prod
+  labels:
+    engine: supabase
+    workload: tpcc
+inputs:
+  supabase_org_id:
+    type: string
+    required: true
+  project_size:
+    type: string
+    default: small
+  disk_size_gb:
+    type: int
+    # Matches the Small tier's target in the RDS scenario's allocated_storage.
+    # The raw 8x RAM_GB formula gives 16, but RDS Postgres on gp3 has a hard
+    # 20 GiB minimum allocated storage, so both sides use 20 here to stay
+    # matched -- override per tier alongside warehouses/threads, see the
+    # invocation table in docs/supabase-vs-rds-benchmark.md. 0 disables the
+    # resize call entirely (Supabase projects always start at 8 GB).
+    default: 20
+  disk_iops:
+    type: int
+    # The compute tier's own documented baseline IOPS, per
+    # https://supabase.com/docs/guides/platform/compute-and-disk:
+    # Small 1000 (default here) / Medium 2000 / Large 3600 / XL 6000.
+    # Deliberately NOT hard-pinned to gp3's flat 3000 baseline for every tier
+    # -- override alongside project_size/disk_size_gb so each tier gets what
+    # it's actually documented to provide. See deployments/rds/postgres/main.tf's
+    # size_map for the matching RDS-side values (clamped to gp3's 3,000 IOPS
+    # floor for Small/Medium, where the docs baseline falls below it).
+    default: 1000
+  disk_throughput_mibps:
+    type: int
+    # 0 (default) omits throughput_mibps from the disk-config API call
+    # entirely, so the Management API picks its own gp3 throughput.
+    # Override via --set disk_throughput_mibps=<value> (MiB/s) to pin it
+    # explicitly. Ignored when disk_type is io2 (that disk type doesn't
+    # accept this attribute).
+    default: 0
+  disk_type:
+    type: string
+    # gp3 (default) or io2. gp3 caps out at min(500 IOPS/GB, 16,000);
+    # tiers whose disk_iops exceeds that need "io2" instead, which the
+    # Management API also supports (up to min(1000 IOPS/GB, 256,000)).
+    default: gp3
+  profile:
+    type: string
+    default: ""
+  warehouses:
+    type: int
+    default: 80
+  prepare_threads:
+    type: int
+    default: 12
+  threads:
+    type: list
+    # Thread-count sweep for the benchmark (suite.fixtures below), not to be
+    # confused with prepare_threads (data-load concurrency). Override with
+    # --set threads=1,2,4,8,16,24.
+    default: [1, 2, 4, 8, 16, 24]
+  duration:
+    type: duration
+    default: 30m
+  warmup_duration:
+    type: duration
+    default: 5m
+  wal_catchup_timeout_secs:
+    type: int
+    # Bounds the wait-for-archiver-catchup step below. See its comment and
+    # docs/supabase-vs-rds-benchmark.md for the 2026-07-16/17 incidents this
+    # addresses. A fixed absolute WAL-size threshold (tried first) turned out
+    # to be the wrong check: healthy, fully-caught-up archiving still leaves
+    # ~4GB of WAL sitting on disk as Postgres's normal steady-state retention
+    # baseline, unrelated to whether archiving is keeping up. The step now
+    # waits for the WAL directory to stop *growing* between samples instead.
+    default: 720
+  instance_type:
+    type: string
+    # Load driver (EC2) instance type, independent of the target's
+    # project_size. The default is sized for small; bump this alongside
+    # project_size for larger tiers (medium/large/xlarge and up) so the
+    # driver's own vCPU count doesn't become the bottleneck instead of the
+    # target.
+    default: c8gd.xlarge
+  region:
+    type: string
+    default: "us-east-1"
+  metrics_enabled:
+    type: bool
+    default: false
+  metrics_host_scrape_interval_secs:
+    type: int
+    default: 5
+target:
+  provider: supabase
+  config:
+    region: "{{ inputs.region }}"
+    org_id: "{{ inputs.supabase_org_id }}"
+    # Fixed, not an input: this scenario exists to isolate the DB engine/hardware
+    # as the only variable in the Supabase-vs-RDS comparison. RDS has no HA
+    # add-on equivalent and no Supavisor-style pooler, so both are held fixed
+    # here rather than exposed as knobs. See docs/supabase-vs-rds-benchmark.md.
+    high_availability: false
+    connection_mode: direct
+    profile: "{{ inputs.profile }}"
+    project_size: "{{ inputs.project_size }}"
+    disk_size_gb: "{{ inputs.disk_size_gb }}"
+    disk_iops: "{{ inputs.disk_iops }}"
+    disk_throughput_mibps: "{{ inputs.disk_throughput_mibps }}"
+    disk_type: "{{ inputs.disk_type }}"
+suite:
+  iterations: 1
+  fixtures:
+    - threads:
+        type: list
+        params:
+          values: "{{ inputs.threads }}"
+  benchmarks:
+    - name: supabase
+      steps:
+        - name: get-pg-version
+          type: metadata
+          command: sql
+          args:
+            name: pg_version
+            query: "SELECT version()"
+        - name: get-pg-settings
+          type: metadata
+          command: sql
+          args:
+            name: pg_settings
+            # Captured for transparency, not enforced equal between platforms:
+            # each side auto-tunes these per instance size using its own
+            # formula, and the comparison targets each platform's managed
+            # defaults rather than identical raw hardware.
+            query: >-
+              SELECT string_agg(name || '=' || setting, ', ' ORDER BY name) FROM pg_settings WHERE name IN ('shared_buffers', 'work_mem', 'max_connections', 'effective_cache_size')
+        - name: network-rtt-baseline
+          # Runs on the driver (the EC2 instance, once bootstrapped) — a TCP
+          # connect-timing loop against the target host/port. Doesn't fix the
+          # fact that Supabase's AZ placement isn't controllable by us (unlike
+          # the pinned-AZ RDS scenario), but lets the results doc quantify how
+          # much of any throughput gap traces to network path vs. engine/hardware.
+          type: shell
+          args:
+            command: |
+              bash -c '
+                for i in $(seq 1 10); do
+                  start_ns=$(date +%s%N)
+                  timeout 5 bash -c "exec 3<>/dev/tcp/{{ target.outputs.host }}/{{ target.outputs.port }}" 2>/dev/null
+                  status=$?
+                  end_ns=$(date +%s%N)
+                  if [ $status -eq 0 ]; then
+                    echo "network-rtt-baseline: tcp_connect_ms=$(( (end_ns - start_ns) / 1000000 ))"
+                  else
+                    echo "network-rtt-baseline: tcp_connect_ms=timeout"
+                  fi
+                done
+              '
+        - name: prepare-warehouses
+          type: go-tpc
+          command: prepare
+          args:
+            warehouses: "{{ inputs.warehouses }}"
+            # parallelize data load
+            threads: "{{ inputs.prepare_threads }}"
+            no-check: ""
+            dropdata: ""
+        - name: wait-for-archiver-catchup
+          # Guards against the 2026-07-16 incident: the prepare-phase bulk
+          # load can generate WAL faster than WAL-G's archive_command can
+          # ship it (confirmed live: 8 GB data + 12 GB stuck WAL == a 20 GB
+          # disk, at which point Supabase flips the project read-only to
+          # protect against a full-disk crash). This is one PL/pgSQL DO block
+          # so it needs no client tooling beyond the standard "sql" step —
+          # pg_ls_waldir() and pg_sleep() both work against the normal
+          # connection role (verified live via `supabase db query --linked`).
+          #
+          # The check is growth-based, not an absolute threshold: an earlier
+          # version waited for pg_ls_waldir() to drop below a fixed 2GB and
+          # reliably timed out even on perfectly healthy archiving
+          # (archived_count climbing, failed_count 0) — ~4GB of WAL sitting
+          # on disk turned out to be Postgres's normal steady-state retention
+          # baseline on this platform, unrelated to whether archiving is
+          # keeping up. What actually matters (per the original incident) is
+          # whether the backlog is *growing without bound*, not its absolute
+          # size. So this samples pg_ls_waldir() twice, wal_sample_interval_secs
+          # apart, and succeeds once it stops growing (stable or shrinking).
+          # An immediate hard-fail guard still aborts right away, without
+          # waiting out the full timeout, if the backlog ever exceeds 80% of
+          # disk_size_gb — a genuinely critical disk shouldn't wait around
+          # hoping it stabilizes.
+          #
+          # Fails loudly (RAISE EXCEPTION) rather than silently proceeding
+          # over a still-critical/still-growing disk if neither condition is
+          # met within wal_catchup_timeout_secs. Doesn't run during the
+          # measured window, so it can't distort the tpmC result — but
+          # doesn't guarantee the sustained run phase itself won't rebuild
+          # backlog; see the doc's residual-risk caveat.
+          #
+          # SET statement_timeout = 0 is required: this project's default is
+          # 2 minutes, which cancels the DO block outright (SQLSTATE 57014)
+          # long before either its own exit condition or wal_catchup_timeout_secs
+          # ever gets evaluated — confirmed live (2026-07-16) that this SET,
+          # sent as a separate statement ahead of the DO block over the same
+          # session, lets the block run past the 2-minute mark without being
+          # killed. Scoped to this one connection/step only (a fresh pgx
+          # connection per "sql" step, per internal/engine/sql.go), not a
+          # persistent project-wide config change.
+          type: sql
+          args:
+            query: >-
+              SET statement_timeout = 0;
+
+              DO $$ DECLARE
+
+
+
+
+                deadline timestamptz := clock_timestamp() + make_interval(secs => {{ inputs.wal_catchup_timeout_secs }});
+                sample_interval_secs constant int := 30;
+                hard_ceiling_bytes bigint := ({{ inputs.disk_size_gb }} * 0.8)::bigint * 1024 * 1024 * 1024;
+                prev_bytes bigint;
+                cur_bytes bigint;
+              BEGIN
+
+
+
+
+                SELECT COALESCE(sum(size), 0) INTO prev_bytes FROM pg_ls_waldir();
+                LOOP
+                  IF prev_bytes > hard_ceiling_bytes THEN
+                    RAISE EXCEPTION 'wal-catchup: WAL backlog % bytes exceeds % byte hard ceiling (80%% of disk_size_gb) -- disk critically full, aborting rather than waiting', prev_bytes, hard_ceiling_bytes;
+                  END IF;
+                  PERFORM pg_sleep(sample_interval_secs);
+                  SELECT COALESCE(sum(size), 0) INTO cur_bytes FROM pg_ls_waldir();
+                  EXIT WHEN cur_bytes <= prev_bytes;
+                  IF clock_timestamp() > deadline THEN
+                    RAISE EXCEPTION 'wal-catchup: WAL backlog still growing (% -> % bytes over %s seconds) after % total seconds -- archiver may be stuck', prev_bytes, cur_bytes, sample_interval_secs, {{ inputs.wal_catchup_timeout_secs }};
+                  END IF;
+                  prev_bytes := cur_bytes;
+                END LOOP;
+              END $$;
+        - name: warm-up
+          # Discarded: workloadMetrics is overwritten by the next (measured)
+          # go-tpc run step below, so this only serves to bring the connection
+          # pool and buffer cache to steady state before the timed window.
+          type: go-tpc
+          command: run
+          args:
+            warehouses: "{{ inputs.warehouses }}"
+            threads: "{{ fixture.threads }}"
+            time: "{{ inputs.warmup_duration }}"
+        - name: benchmark
+          type: go-tpc
+          command: run
+          args:
+            warehouses: "{{ inputs.warehouses }}"
+            threads: "{{ fixture.threads }}"
+            time: "{{ inputs.duration }}"
+            interval: "1s"
+driver:
+  provider: ec2
+  config:
+    module: ./deployments/ec2/loaddriver_gotpc
+    vars:
+      instance_type: "{{ inputs.instance_type }}"
+      region: "{{ inputs.region }}"
+      vector_enabled: "{{ inputs.metrics_enabled }}"
+      vector_sink: "{{ inputs.collector }}"
+      vector_host_metrics_scrape_interval_secs: "{{ inputs.metrics_host_scrape_interval_secs }}"
+      tags:
+        created-by: benchctl
+collector:
+  provider: stdout
+  config:
+    file_enabled: true

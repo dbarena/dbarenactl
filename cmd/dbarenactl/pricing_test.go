@@ -47,7 +47,7 @@ func TestPricingSetListShow_RoundTrip(t *testing.T) {
 		t.Fatalf("write items file: %v", err)
 	}
 
-	setOut := runCLI(t, "pricing", "set", "--candidate", "../../candidates/supabase-tpcc.yaml", "--file", itemsFile, "--source", "manual test entry")
+	setOut := runCLI(t, "pricing", "set", "--candidate", "../../candidates/supabase/supabase/tpcc/manifest.yaml", "--file", itemsFile, "--source", "manual test entry")
 	if !strings.Contains(setOut, "Supabase") || !strings.Contains(setOut, "Items:             1") {
 		t.Errorf("set output = %q, want it to mention provider Supabase and 1 item", setOut)
 	}

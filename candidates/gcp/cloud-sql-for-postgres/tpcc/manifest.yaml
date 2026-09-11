@@ -1,0 +1,185 @@
+# Sweep manifest for Google Cloud SQL for Postgres
+#
+# Suppply with `dbarenactl run --candidate=candidates/gcp/cloud-sql-for-postgres/tpcc/manifest.yaml`.
+#
+# No 'small' tier; test points start with 'medium' as N4's minimum memory
+# ratio (2 GB/vCPU) enforces a minimum of 2vCPU/4GB which is identical to 'medium'.
+provider: GCP
+product: Cloud SQL for Postgres
+plan: Enterprise
+workload: tpcc
+region: us-east1
+scenario_path: scenario.yaml
+test_points:
+  # HYPERDISK_BALANCED lowest allowed value is 3,000 IOPS and 140 MiB/s.
+  - tier: medium
+    bound_type: io
+    set:
+      warehouses: "160"
+      client_threads: "1,2,4,8,12"
+      driver_instance_type: c4a-standard-4
+      disk_size_gb: "32"
+      disk_iops: "3000"
+      disk_throughput_mibps: "140"
+      db_instance_type: db-custom-N4-2-4096
+      disk_type: HYPERDISK_BALANCED
+  - tier: medium
+    bound_type: compute
+    set:
+      warehouses: "16"
+      client_threads: "1,2,4,8,12"
+      driver_instance_type: c4a-standard-4
+      disk_size_gb: "20"
+      disk_iops: "3000"
+      disk_throughput_mibps: "140"
+      db_instance_type: db-custom-N4-2-4096
+      disk_type: HYPERDISK_BALANCED
+  - tier: large
+    bound_type: io
+    set:
+      warehouses: "320"
+      client_threads: "1,2,4,8,12"
+      driver_instance_type: c4a-standard-4
+      disk_size_gb: "64"
+      disk_iops: "3000"
+      disk_throughput_mibps: "140"
+      db_instance_type: db-custom-N4-2-8192
+      disk_type: HYPERDISK_BALANCED
+  - tier: large
+    bound_type: compute
+    set:
+      warehouses: "32"
+      client_threads: "1,2,4,8,12"
+      driver_instance_type: c4a-standard-4
+      disk_size_gb: "20"
+      disk_iops: "3000"
+      disk_throughput_mibps: "140"
+      db_instance_type: db-custom-N4-2-8192
+      disk_type: HYPERDISK_BALANCED
+  - tier: xlarge
+    bound_type: io
+    set:
+      warehouses: "640"
+      client_threads: "1,2,4,8,16,24"
+      driver_instance_type: c4a-standard-4
+      disk_size_gb: "128"
+      disk_iops: "12000"
+      disk_throughput_mibps: "149"
+      db_instance_type: db-custom-N4-4-16384
+      disk_type: HYPERDISK_BALANCED
+  - tier: xlarge
+    bound_type: compute
+    set:
+      warehouses: "64"
+      client_threads: "1,2,4,8,16,24"
+      driver_instance_type: c4a-standard-4
+      disk_size_gb: "20"
+      disk_iops: "3000"
+      disk_throughput_mibps: "140"
+      db_instance_type: db-custom-N4-4-16384
+      disk_type: HYPERDISK_BALANCED
+  - tier: 2xlarge
+    bound_type: io
+    set:
+      warehouses: "1280"
+      client_threads: "1,2,4,8,16,32,48"
+      driver_instance_type: c4a-standard-8
+      disk_size_gb: "256"
+      disk_iops: "12000"
+      disk_throughput_mibps: "297"
+      db_instance_type: db-custom-N4-8-32768
+      disk_type: HYPERDISK_BALANCED
+  - tier: 2xlarge
+    bound_type: compute
+    variant: cost-optimized
+    set:
+      warehouses: "128"
+      client_threads: "1,2,4,8,16,32,48"
+      driver_instance_type: c4a-standard-8
+      disk_size_gb: "64"
+      disk_iops: "6000"
+      disk_throughput_mibps: "250"
+      db_instance_type: db-custom-N4-8-32768
+      disk_type: HYPERDISK_BALANCED
+  - tier: 2xlarge
+    bound_type: compute
+    variant: performance-optimized
+    set:
+      warehouses: "128"
+      client_threads: "1,2,4,8,16,32,48"
+      driver_instance_type: c4a-standard-8
+      disk_size_gb: "64"
+      disk_iops: "12000"
+      disk_throughput_mibps: "300"
+      db_instance_type: db-custom-N4-8-32768
+      disk_type: HYPERDISK_BALANCED
+  - tier: 4xlarge
+    bound_type: io
+    set:
+      warehouses: "2560"
+      client_threads: "1,2,4,8,16,32,64,96"
+      driver_instance_type: c4a-standard-16
+      disk_size_gb: "512"
+      disk_iops: "20000"
+      disk_throughput_mibps: "594"
+      db_instance_type: db-custom-N4-16-65536
+      disk_type: HYPERDISK_BALANCED
+  - tier: 4xlarge
+    bound_type: compute
+    variant: cost-optimized
+    set:
+      warehouses: "256"
+      client_threads: "1,2,4,8,16,32,64,96"
+      driver_instance_type: c4a-standard-16
+      disk_size_gb: "128"
+      disk_iops: "12000"
+      disk_throughput_mibps: "500"
+      db_instance_type: db-custom-N4-16-65536
+      disk_type: HYPERDISK_BALANCED
+  - tier: 4xlarge
+    bound_type: compute
+    variant: performance-optimized
+    set:
+      warehouses: "256"
+      client_threads: "1,2,4,8,16,32,64,96"
+      driver_instance_type: c4a-standard-16
+      disk_size_gb: "128"
+      disk_iops: "20000"
+      disk_throughput_mibps: "600"
+      db_instance_type: db-custom-N4-16-65536
+      disk_type: HYPERDISK_BALANCED
+  - tier: 8xlarge
+    bound_type: io
+    set:
+      warehouses: "5120"
+      client_threads: "1,2,4,8,16,32,64,128,192"
+      driver_instance_type: c4a-standard-32
+      disk_size_gb: "1024"
+      disk_iops: "40000"
+      disk_throughput_mibps: "1188"
+      db_instance_type: db-custom-N4-32-131072
+      disk_type: HYPERDISK_BALANCED
+  - tier: 8xlarge
+    bound_type: compute
+    variant: cost-optimized
+    set:
+      warehouses: "512"
+      client_threads: "1,2,4,8,16,32,64,128,192"
+      driver_instance_type: c4a-standard-32
+      disk_size_gb: "256"
+      disk_iops: "12000"
+      disk_throughput_mibps: "500"
+      db_instance_type: db-custom-N4-32-131072
+      disk_type: HYPERDISK_BALANCED
+  - tier: 8xlarge
+    bound_type: compute
+    variant: performance-optimized
+    set:
+      warehouses: "512"
+      client_threads: "1,2,4,8,16,32,64,128,192"
+      driver_instance_type: c4a-standard-32
+      disk_size_gb: "256"
+      disk_iops: "40000"
+      disk_throughput_mibps: "1200"
+      db_instance_type: db-custom-N4-32-131072
+      disk_type: HYPERDISK_BALANCED

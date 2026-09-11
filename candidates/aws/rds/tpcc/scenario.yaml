@@ -1,0 +1,205 @@
+apiVersion: bench/v1
+kind: Scenario
+metadata:
+  name: rds-tpcc-ec2
+  labels:
+    engine: rds
+    workload: tpcc
+inputs:
+  region:
+    type: string
+    default: "us-east-1"
+    description: "AWS region to pick"
+  db_instance_class:
+    type: string
+    default: db.t4g.small
+    description: RDS DB instance class, e.g. "db.m9g.xlarge"
+  engine_version:
+    type: string
+    default: "17.11"
+    description: "Postgres version to use"
+  pg_user:
+    type: string
+    default: "bench"
+    description: "Postgres user name"
+  pg_password:
+    type: string
+    default: "benchbench"
+    description: "Postgres password"
+  disk_size_gb:
+    type: int
+    default: 20
+    description: Disk size in GB
+  disk_iops:
+    type: int
+    # gp3 provisioned IOPS. Only takes effect if disk_size_gb is >= 400.
+    #
+    # see also https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html#gp3-storage
+    default: 3000
+    description: Provisioned IOPS (only for disk_size_gb >= 400)
+  disk_throughput_mibps:
+    type: int
+    # gp3 provisioned throughput (MiB/s). 0 (default) omits the argument,
+    # letting AWS apply gp3's free baseline for disk_size_gb/disk_iops.
+    #
+    # see also https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html#gp3-storage
+    default: 0
+    description: Provisioned disk throughput (only for disk_size_gb >= 400)
+  warehouses:
+    type: int
+    default: 80
+    description: Number of warehouses to simulate
+  prepare_threads:
+    type: int
+    default: 12
+    description: Number of clients for data loading
+  client_threads:
+    type: list
+    default: [1, 2, 4, 8, 16, 24]
+    description: Number of clients for the actual benchmark
+  duration:
+    type: duration
+    default: 30m
+    description: Duration of the actual benchmark
+  warmup_duration:
+    type: duration
+    default: 5m
+    description: Duration of the warmup phase for the benchmark
+  wal_settle_duration_secs:
+    type: int
+    default: 720
+    description: Pause time after the initial data load to allow for cooldown
+  driver_instance_type:
+    type: string
+    # Load driver (EC2) machine type, independent of the target's capabilities. 
+    # Bump this alongside the target to avoid accidental bottlenecks.
+    default: c8gd.xlarge
+    description: Instance type of the load driver instance
+  metrics_enabled:
+    type: bool
+    default: false
+    description: Whether to capture metrics on the load driver instance
+  metrics_interval_secs:
+    type: int
+    default: 5
+    description: Interval in which to get load test driver metrics
+target:
+  provider: opentofu
+  config:
+    module: ./deployments/rds/postgres
+    vars:
+      db_instance_class: "{{ inputs.db_instance_class }}"
+      engine_version: "{{ inputs.engine_version }}"
+      region: "{{ inputs.region }}"
+      pg_user: "{{ inputs.pg_user }}"
+      pg_password: "{{ inputs.pg_password }}"
+      allocated_storage_gb: "{{ inputs.disk_size_gb }}"
+      iops: "{{ inputs.disk_iops }}"
+      disk_throughput_mibps: "{{ inputs.disk_throughput_mibps }}"
+      tags:
+        created-by: benchctl
+suite:
+  iterations: 1
+  fixtures:
+    - client_threads:
+        type: list
+        params:
+          values: "{{ inputs.client_threads }}"
+  benchmarks:
+    - name: rds
+      steps:
+        - name: get-pg-version
+          type: metadata
+          command: sql
+          args:
+            name: pg_version
+            query: "SELECT version()"
+        - name: get-pg-settings
+          type: metadata
+          command: sql
+          args:
+            name: pg_settings
+            # Captured for transparency, but we never tune the providers' defaults.
+            query: >-
+              SELECT string_agg(name || '=' || setting, ', ' ORDER BY name) FROM pg_settings WHERE name IN ('shared_buffers', 'work_mem', 'max_connections', 'effective_cache_size')
+        - name: network-rtt-baseline
+          # TCP connect-timing loop as a sanity check that colocation worked.
+          # We expect that the driver is deterministically pinned to the same 
+          # AZ as the RDS instance (see deployments/rds/postgres/main.tf).
+          type: shell
+          args:
+            command: |
+              bash -c '
+                for i in $(seq 1 10); do
+                  start_ns=$(date +%s%N)
+                  timeout 5 bash -c "exec 3<>/dev/tcp/{{ target.outputs.host }}/{{ target.outputs.port }}" 2>/dev/null
+                  status=$?
+                  end_ns=$(date +%s%N)
+                  if [ $status -eq 0 ]; then
+                    echo "network-rtt-baseline: tcp_connect_ms=$(( (end_ns - start_ns) / 1000000 ))"
+                  else
+                    echo "network-rtt-baseline: tcp_connect_ms=timeout"
+                  fi
+                done
+              '
+        - name: prepare-warehouses
+          type: go-tpc
+          command: prepare
+          args:
+            warehouses: "{{ inputs.warehouses }}"
+            # parallelize data load
+            threads: "{{ inputs.prepare_threads }}"
+            no-check: ""
+            dropdata: ""
+        - name: wal-settle-pause
+          # wait for a while to let the system cool down after the batch load
+          type: shell
+          args:
+            command: "sleep {{ inputs.wal_settle_duration_secs }}"
+        - name: warm-up
+          # The metrics from this run are discarded: workloadMetrics is overwritten 
+          # by the next (measured) go-tpc run step below, so this only serves to 
+          # bring the connection pool and buffer cache to steady state.
+          type: go-tpc
+          command: run
+          args:
+            warehouses: "{{ inputs.warehouses }}"
+            threads: "{{ fixture.client_threads }}"
+            time: "{{ inputs.warmup_duration }}"
+        - name: benchmark
+          type: go-tpc
+          command: run
+          args:
+            warehouses: "{{ inputs.warehouses }}"
+            threads: "{{ fixture.client_threads }}"
+            time: "{{ inputs.duration }}"
+            interval: "1s"
+        - name: get-db-size
+          type: metadata
+          command: sql
+          args:
+            name: db_size
+            query: "SELECT pg_size_pretty(pg_database_size(current_database()))"
+        - name: get-wal-size
+          type: metadata
+          command: sql
+          args:
+            name: wal_size
+            query: "SELECT pg_size_pretty(COALESCE(sum(size), 0)) FROM pg_ls_waldir()"
+driver:
+  provider: ec2
+  config:
+    module: ./deployments/ec2/loaddriver_gotpc
+    vars:
+      instance_type: "{{ inputs.driver_instance_type }}"
+      region: "{{ inputs.region }}"
+      subnet_id: "{{ target.outputs.subnet_id }}"
+      vector_enabled: "{{ inputs.metrics_enabled }}"
+      vector_sink: stdout
+      vector_host_metrics_scrape_interval_secs: "{{ inputs.metrics_interval_secs }}"
+      tags:
+        created-by: benchctl
+collector:
+  provider: stdout
+  config:
+    file_enabled: true

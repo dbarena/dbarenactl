@@ -1,0 +1,238 @@
+apiVersion: bench/v1
+kind: Scenario
+metadata:
+  name: gcp-cloudsql-tpcc-tiers
+  labels:
+    engine: gcp-cloudsql
+    workload: tpcc
+inputs:
+  project_id:
+    type: string
+    # Empty (default) lets the google provider resolve it from
+    # GOOGLE_CLOUD_PROJECT (or gcloud's active config) -- never hardcode a
+    # project id in the scenario. Set via --set project_id=... only to
+    # override that resolution for a one-off run.
+    default: ""
+    description: GCP project ID to use
+  db_instance_type:
+    type: string
+    default: "db-custom-N4-2-4096"
+    description: Cloud SQL instance machine type
+  disk_type:
+    type: string
+    # Only "HYPERDISK_BALANCED" is valid -- required by the N4 machine
+    # series (PD_SSD isn't valid with N4).
+    default: "HYPERDISK_BALANCED"
+    description: Cloud SQL disk type
+  engine_version:
+    type: string
+    # Cloud SQL only accepts a major-version enum.
+    default: "POSTGRES_17"
+    description: Postgres version to use
+  pg_user:
+    type: string
+    default: "bench"
+    description: Postgres user name
+  pg_password:
+    type: string
+    default: "benchbench"
+    description: Postgres password
+  disk_size_gb:
+    type: int
+    # No sensible default
+    required: true
+    description: Disk size in GB
+  disk_iops:
+    type: int
+    # No sensible default
+    required: true
+    description: Provisioned IOPS
+  disk_throughput_mibps:
+    type: int
+    # No sensible default
+    required: true
+    description: Provisioned disk throughput
+  warehouses:
+    type: int
+    default: 160
+    description: Number of warehouses to simulate
+  prepare_threads:
+    type: int
+    default: 12
+    description: Number of clients for data loading
+  client_threads:
+    type: list
+    # Thread-count sweep for the benchmark (suite.fixtures below), not to be
+    # confused with prepare_threads (data-load concurrency). Override with
+    # --set client_threads=1,2,4,8,16,24.
+    default: [1, 2, 4, 8, 16, 24]
+    description: Number of clients for the actual benchmark
+  duration:
+    type: duration
+    default: 30m
+    description: Duration of the actual benchmark
+  warmup_duration:
+    type: duration
+    default: 5m
+    description: Duration of the warmup phase for the benchmark
+  wal_settle_duration_secs:
+    type: int
+    default: 720
+    description: Pause time after the initial data load to allow for cooldown
+  driver_instance_type:
+    type: string
+    # Load driver (GCE) machine type, independent of the target's capabilities. 
+    # Bump this alongside the target to avoid accidental bottlenecks.
+    default: c4a-standard-4
+    description: Instance type of the load driver instance
+  region:
+    type: string
+    default: "us-east1"
+    description: GCP region to pick
+  zone:
+    type: string
+    default: "us-east1-b"
+    description: GCP zone to pick
+  metrics_enabled:
+    type: bool
+    default: false
+    description: Whether to capture metrics on the load driver instance
+  metrics_interval_secs:
+    type: int
+    default: 5
+    description: Interval in which to get load test driver metrics
+target:
+  provider: opentofu
+  config:
+    module: ./deployments/gcp-cloudsql/postgres
+    # Shared VPC network/peering, created once and reused across every run
+    # (never torn down). Sidesteps an upstream OpenTofu/google-provider 
+    # bug that can hang destroying the peering connection 
+    # (see hashicorp/terraform-provider-google#16275).
+    gcp_network_name: benchctl-gcp-cloudsql-shared
+    vars:
+      project_id: "{{ inputs.project_id }}"
+      db_instance_type: "{{ inputs.db_instance_type }}"
+      disk_type: "{{ inputs.disk_type }}"
+      engine_version: "{{ inputs.engine_version }}"
+      region: "{{ inputs.region }}"
+      zone: "{{ inputs.zone }}"
+      pg_user: "{{ inputs.pg_user }}"
+      pg_password: "{{ inputs.pg_password }}"
+      disk_size_gb: "{{ inputs.disk_size_gb }}"
+      disk_provisioned_iops: "{{ inputs.disk_iops }}"
+      disk_provisioned_throughput_mibps: "{{ inputs.disk_throughput_mibps }}"
+      tags:
+        created-by: benchctl
+suite:
+  iterations: 1
+  fixtures:
+    - client_threads:
+        type: list
+        params:
+          values: "{{ inputs.client_threads }}"
+  benchmarks:
+    - name: gcp-cloudsql
+      steps:
+        - name: get-pg-version
+          type: metadata
+          command: sql
+          args:
+            name: pg_version
+            query: "SELECT version()"
+        - name: get-pg-settings
+          type: metadata
+          command: sql
+          args:
+            name: pg_settings
+            # Captured for transparency, not enforced equal between platforms:
+            # each side auto-tunes these per instance size using its own
+            # formula, and the comparison targets each platform's managed
+            # defaults rather than identical raw hardware.
+            query: >-
+              SELECT string_agg(name || '=' || setting, ', ' ORDER BY name) FROM pg_settings WHERE name IN ('shared_buffers', 'work_mem', 'max_connections', 'effective_cache_size')
+        - name: network-rtt-baseline
+          # Here the driver is deterministically pinned to the same zone/VPC as the
+          # Cloud  SQL instance, so this should read consistently low and mostly 
+          # serves as a sanity check that colocation worked.
+          type: shell
+          args:
+            command: |
+              bash -c '
+                for i in $(seq 1 10); do
+                  start_ns=$(date +%s%N)
+                  timeout 5 bash -c "exec 3<>/dev/tcp/{{ target.outputs.host }}/{{ target.outputs.port }}" 2>/dev/null
+                  status=$?
+                  end_ns=$(date +%s%N)
+                  if [ $status -eq 0 ]; then
+                    echo "network-rtt-baseline: tcp_connect_ms=$(( (end_ns - start_ns) / 1000000 ))"
+                  else
+                    echo "network-rtt-baseline: tcp_connect_ms=timeout"
+                  fi
+                done
+              '
+        - name: prepare-warehouses
+          type: go-tpc
+          command: prepare
+          args:
+            warehouses: "{{ inputs.warehouses }}"
+            # parallelize data load
+            threads: "{{ inputs.prepare_threads }}"
+            no-check: ""
+            dropdata: ""
+        - name: wal-settle-pause
+          # wait for a while to let the system cool down after the batch load
+          type: shell
+          args:
+            command: "sleep {{ inputs.wal_settle_duration_secs }}"
+        - name: warm-up
+          # Discarded: workloadMetrics is overwritten by the next (measured)
+          # go-tpc run step below, so this only serves to bring the connection
+          # pool and buffer cache to steady state before the timed window.
+          type: go-tpc
+          command: run
+          args:
+            warehouses: "{{ inputs.warehouses }}"
+            threads: "{{ fixture.client_threads }}"
+            time: "{{ inputs.warmup_duration }}"
+        - name: benchmark
+          type: go-tpc
+          command: run
+          args:
+            warehouses: "{{ inputs.warehouses }}"
+            threads: "{{ fixture.client_threads }}"
+            time: "{{ inputs.duration }}"
+            interval: "1s"
+        - name: get-db-size
+          type: metadata
+          command: sql
+          args:
+            name: db_size
+            query: "SELECT pg_size_pretty(pg_database_size(current_database()))"
+        - name: get-wal-size
+          type: metadata
+          command: sql
+          args:
+            name: wal_size
+            query: "SELECT pg_size_pretty(COALESCE(sum(size), 0)) FROM pg_ls_waldir()"
+driver:
+  provider: gce
+  config:
+    module: ./deployments/gce/loaddriver_gotpc
+    vars:
+      project_id: "{{ inputs.project_id }}"
+      instance_type: "{{ inputs.driver_instance_type }}"
+      # Co-location: same VPC/subnetwork/zone as the Cloud SQL target
+      network: "{{ target.outputs.network }}"
+      subnetwork: "{{ target.outputs.subnetwork }}"
+      zone: "{{ target.outputs.zone }}"
+      vector_enabled: "{{ inputs.metrics_enabled }}"
+      vector_sink: stdout
+      vector_host_metrics_scrape_interval_secs: "{{ inputs.metrics_interval_secs }}"
+      tags:
+        created-by: benchctl
+collector:
+  provider: stdout
+  config:
+    file_enabled: true
+

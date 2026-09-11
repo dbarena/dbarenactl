@@ -71,6 +71,8 @@ inputs:
     description: Pause time after the initial data load to allow for cooldown
   instance_type:
     type: string
+    # Load driver (EC2) machine type, independent of the target's capabilities. 
+    # Bump this alongside the target to avoid accidental bottlenecks.
     default: c8gd.xlarge
     description: Instance type of the load driver instance
   metrics_enabled:

@@ -20,40 +20,22 @@ inputs:
     description: Supabase project size
   disk_size_gb:
     type: int
-    # Matches the Small tier's target in the RDS scenario's allocated_storage.
-    # The raw 8x RAM_GB formula gives 16, but RDS Postgres on gp3 has a hard
-    # 20 GiB minimum allocated storage, so both sides use 20 here to stay
-    # matched -- override per tier alongside warehouses/threads, see the
-    # invocation table in docs/supabase-vs-rds-benchmark.md. 0 disables the
-    # resize call entirely (Supabase projects always start at 8 GB).
     default: 20
     description: Disk size in GB
   disk_iops:
     type: int
-    # The compute tier's own documented baseline IOPS, per
-    # https://supabase.com/docs/guides/platform/compute-and-disk:
-    # Small 1000 (default here) / Medium 2000 / Large 3600 / XL 6000.
-    # Deliberately NOT hard-pinned to gp3's flat 3000 baseline for every tier
-    # -- override alongside project_size/disk_size_gb so each tier gets what
-    # it's actually documented to provide. See deployments/rds/postgres/main.tf's
-    # size_map for the matching RDS-side values (clamped to gp3's 3,000 IOPS
-    # floor for Small/Medium, where the docs baseline falls below it).
     default: 1000
     description: Provisioned IOPS
   disk_throughput_mibps:
     type: int
     # 0 (default) omits throughput_mibps from the disk-config API call
-    # entirely, so the Management API picks its own gp3 throughput.
-    # Override via --set disk_throughput_mibps=<value> (MiB/s) to pin it
-    # explicitly. Ignored when disk_type is io2 (that disk type doesn't
-    # accept this attribute).
+    # so the Management API picks its own gp3 throughput.
+    # 
+    # Ignored when disk_type is io2 (that disk type doesn't accept this attribute).
     default: 0
     description: Provisioned disk throughput
   disk_type:
     type: string
-    # gp3 (default) or io2. gp3 caps out at min(500 IOPS/GB, 16,000);
-    # tiers whose disk_iops exceeds that need "io2" instead, which the
-    # Management API also supports (up to min(1000 IOPS/GB, 256,000)).
     default: gp3
     description: Disk type, gp3 or io2
   profile:
@@ -70,9 +52,6 @@ inputs:
     description: Number of clients for data loading
   client_threads:
     type: list
-    # Thread-count sweep for the benchmark (suite.fixtures below), not to be
-    # confused with prepare_threads (data-load concurrency). Override with
-    # --set client_threads=1,2,4,8,16,24.
     default: [1, 2, 4, 8, 16, 24]
     description: Number of clients for the actual benchmark
   duration:
@@ -89,11 +68,8 @@ inputs:
     description: Pause time after the initial data load to allow for cooldown
   instance_type:
     type: string
-    # Load driver (EC2) instance type, independent of the target's
-    # project_size. The default is sized for small; bump this alongside
-    # project_size for larger tiers (medium/large/xlarge and up) so the
-    # driver's own vCPU count doesn't become the bottleneck instead of the
-    # target.
+    # Load driver (EC2) machine type, independent of the target's capabilities. 
+    # Bump this alongside the target to avoid accidental bottlenecks.
     default: c8gd.xlarge
     description: Instance type of the load driver instance
   region:

@@ -26,9 +26,7 @@ inputs:
     description: Cloud SQL disk type
   engine_version:
     type: string
-    # Cloud SQL only accepts a major-version enum (no minor-version pinning
-    # like RDS's "17.10") -- see deployments/gcp-cloudsql/postgres/variables.tf
-    # for where to look up currently valid values.
+    # Cloud SQL only accepts a major-version enum.
     default: "POSTGRES_17"
     description: Postgres version to use
   pg_user:
@@ -79,20 +77,12 @@ inputs:
     description: Duration of the warmup phase for the benchmark
   wal_settle_duration_secs:
     type: int
-    # Same fixed-pause rationale as the RDS scenario (see
-    # scenarios/rds-tpcc-ec2-tiers.yaml): Cloud SQL's point-in-time-recovery
-    # log retention, like RDS's automated backups, isn't a self-managed
-    # archive_command/pg_stat_archiver signal we can poll, so this is a fixed
-    # settle pause rather than a real check.
     default: 720
     description: Pause time after the initial data load to allow for cooldown
   instance_type:
     type: string
-    # Load driver (GCE) machine type, independent of the target's
-    # project_size. The default is sized for medium; bump this alongside
-    # project_size for large/xlarge/2xlarge/4xlarge/8xlarge runs so the
-    # driver's own vCPU count doesn't become the bottleneck instead of the
-    # target.
+    # Load driver (GCE) machine type, independent of the target's capabilities. 
+    # Bump this alongside the target to avoid accidental bottlenecks.
     default: c4a-standard-4
     description: Instance type of the load driver instance
   region:
@@ -116,13 +106,9 @@ target:
   config:
     module: ./deployments/gcp-cloudsql/postgres
     # Shared VPC network/peering, created once and reused across every run
-    # (never torn down -- see main.tf's lifecycle.destroy = false and
-    # internal/providers/opentofu's importSharedGCPNetworkResources, which
-    # adopts these resources into each run's otherwise-empty tofu state via
-    # `tofu import` before every apply). Sidesteps both the ~180s
-    # peering-propagation wait on every run and a confirmed upstream
-    # OpenTofu/google-provider bug that can hang destroying the peering
-    # connection (hashicorp/terraform-provider-google#16275).
+    # (never torn down). Sidesteps an upstream OpenTofu/google-provider 
+    # bug that can hang destroying the peering connection 
+    # (see hashicorp/terraform-provider-google#16275).
     gcp_network_name: benchctl-gcp-cloudsql-shared
     vars:
       project_id: "{{ inputs.project_id }}"
@@ -166,11 +152,9 @@ suite:
             query: >-
               SELECT string_agg(name || '=' || setting, ', ' ORDER BY name) FROM pg_settings WHERE name IN ('shared_buffers', 'work_mem', 'max_connections', 'effective_cache_size')
         - name: network-rtt-baseline
-          # Same TCP connect-timing loop as the RDS/Supabase scenarios. Here the
-          # driver is deterministically pinned to the same zone/VPC as the Cloud
-          # SQL instance (see deployments/gcp-cloudsql/postgres/main.tf), so this
-          # should read consistently low and mostly serves as a sanity check that
-          # colocation worked, rather than a variable to explain.
+          # Here the driver is deterministically pinned to the same zone/VPC as the
+          # Cloud  SQL instance, so this should read consistently low and mostly 
+          # serves as a sanity check that colocation worked.
           type: shell
           args:
             command: |
@@ -238,8 +222,7 @@ driver:
     vars:
       project_id: "{{ inputs.project_id }}"
       instance_type: "{{ inputs.instance_type }}"
-      # Co-location handoff: same VPC/subnetwork/zone as the Cloud SQL target
-      # (the GCP-side equivalent of RDS's subnet_id -> ec2 driver wiring).
+      # Co-location: same VPC/subnetwork/zone as the Cloud SQL target
       network: "{{ target.outputs.network }}"
       subnetwork: "{{ target.outputs.subnetwork }}"
       zone: "{{ target.outputs.zone }}"

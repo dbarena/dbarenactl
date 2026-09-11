@@ -21,7 +21,7 @@ test_points:
       disk_iops: "3000"
       disk_type: "gp3"
       client_threads: "1,2,4,8,12"
-      instance_type: c8gd.xlarge
+      driver_instance_type: c8gd.xlarge
   - tier: small
     bound_type: compute
     set:
@@ -33,7 +33,7 @@ test_points:
       disk_iops: "3000"
       disk_throughput_mibps: "125"
       client_threads: "1,2,4,8,12"
-      instance_type: c8gd.xlarge
+      driver_instance_type: c8gd.xlarge
   - tier: medium
     bound_type: io
     set:
@@ -46,7 +46,7 @@ test_points:
       disk_throughput_mibps: "125"
       disk_type: "gp3"
       client_threads: "1,2,4,8,12"
-      instance_type: c8gd.xlarge
+      driver_instance_type: c8gd.xlarge
   - tier: medium
     bound_type: compute
     set:
@@ -58,7 +58,7 @@ test_points:
       disk_iops: "3000"
       disk_throughput_mibps: "125"
       client_threads: "1,2,4,8,12"
-      instance_type: c8gd.xlarge
+      driver_instance_type: c8gd.xlarge
   - tier: large
     bound_type: io
     set:
@@ -71,7 +71,7 @@ test_points:
       disk_throughput_mibps: "125"
       disk_type: "gp3"
       client_threads: "1,2,4,8,12"
-      instance_type: c8gd.xlarge
+      driver_instance_type: c8gd.xlarge
   - tier: large
     bound_type: compute
     set:
@@ -83,7 +83,7 @@ test_points:
       disk_iops: "3000"
       disk_throughput_mibps: "125"
       client_threads: "1,2,4,8,12"
-      instance_type: c8gd.xlarge
+      driver_instance_type: c8gd.xlarge
   # 12,000 IOPS, matching RDS's floor at 400 GiB
   - tier: xlarge
     bound_type: io
@@ -97,7 +97,7 @@ test_points:
       disk_throughput_mibps: "149"
       disk_type: "gp3"
       client_threads: "1,2,4,8,16,24"
-      instance_type: c8gd.xlarge
+      driver_instance_type: c8gd.xlarge
   - tier: xlarge
     bound_type: compute
     set:
@@ -109,7 +109,7 @@ test_points:
       disk_iops: "3000"
       disk_throughput_mibps: "125"
       client_threads: "1,2,4,8,16,24"
-      instance_type: c8gd.xlarge
+      driver_instance_type: c8gd.xlarge
   - tier: 2xlarge
     bound_type: io
     set:
@@ -122,7 +122,7 @@ test_points:
       disk_throughput_mibps: "297"
       disk_type: "gp3"
       client_threads: "1,2,4,8,16,32,48"
-      instance_type: c8gd.2xlarge
+      driver_instance_type: c8gd.2xlarge
   - tier: 2xlarge
     bound_type: compute
     variant: cost-optimized
@@ -135,7 +135,7 @@ test_points:
       disk_iops: "6000"
       disk_throughput_mibps: "250"
       client_threads: "1,2,4,8,16,32,48"
-      instance_type: c8gd.2xlarge
+      driver_instance_type: c8gd.2xlarge
   # performance-optimized: matches the io-bound row above's iops (12,000); throughput rounded to
   # 300 (io-bound's own documented-baseline value is 297) and aligned with GCP's identical
   # performance-optimized config at this tier
@@ -151,7 +151,7 @@ test_points:
       disk_iops: "12000"
       disk_throughput_mibps: "300"
       client_threads: "1,2,4,8,16,32,48"
-      instance_type: c8gd.2xlarge
+      driver_instance_type: c8gd.2xlarge
   - tier: 4xlarge
     bound_type: io
     set:
@@ -164,7 +164,7 @@ test_points:
       disk_throughput_mibps: "594"
       disk_type: "gp3"
       client_threads: "1,2,4,8,16,32,64,96"
-      instance_type: c8gd.4xlarge
+      driver_instance_type: c8gd.4xlarge
   - tier: 4xlarge
     bound_type: compute
     variant: cost-optimized
@@ -177,7 +177,7 @@ test_points:
       disk_iops: "12000"
       disk_throughput_mibps: "500"
       client_threads: "1,2,4,8,16,32,64,96"
-      instance_type: c8gd.4xlarge
+      driver_instance_type: c8gd.4xlarge
   - tier: 4xlarge
     bound_type: compute
     variant: performance-optimized
@@ -190,7 +190,7 @@ test_points:
       disk_iops: "20000"
       disk_throughput_mibps: "600"
       client_threads: "1,2,4,8,16,32,64,96"
-      instance_type: c8gd.4xlarge
+      driver_instance_type: c8gd.4xlarge
   - tier: 8xlarge
     bound_type: io
     set:
@@ -203,7 +203,7 @@ test_points:
       disk_throughput_mibps: "1188"
       disk_type: "gp3"
       client_threads: "1,2,4,8,16,32,64,128,192"
-      instance_type: c8gd.8xlarge
+      driver_instance_type: c8gd.8xlarge
   - tier: 8xlarge
     bound_type: compute
     variant: cost-optimized
@@ -216,7 +216,7 @@ test_points:
       disk_iops: "12000"
       disk_throughput_mibps: "500"
       client_threads: "1,2,4,8,16,32,64,128,192"
-      instance_type: c8gd.8xlarge
+      driver_instance_type: c8gd.8xlarge
   - tier: 8xlarge
     bound_type: compute
     variant: performance-optimized
@@ -229,4 +229,4 @@ test_points:
       disk_iops: "40000"
       disk_throughput_mibps: "1200"
       client_threads: "1,2,4,8,16,32,64,128,192"
-      instance_type: c8gd.8xlarge
+      driver_instance_type: c8gd.8xlarge

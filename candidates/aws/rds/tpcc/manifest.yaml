@@ -13,7 +13,7 @@ test_points:
       db_instance_class: db.t4g.small
       warehouses: "80"
       client_threads: "1,2,4,8,12"
-      instance_type: c8gd.xlarge
+      driver_instance_type: c8gd.xlarge
       disk_size_gb: "20"
       disk_iops: "3000"
     pricing:
@@ -24,7 +24,7 @@ test_points:
       db_instance_class: db.t4g.small
       warehouses: "8"
       client_threads: "1,2,4,8,12"
-      instance_type: c8gd.xlarge
+      driver_instance_type: c8gd.xlarge
       disk_size_gb: "20"
       disk_iops: "3000"
     pricing:
@@ -35,7 +35,7 @@ test_points:
       db_instance_class: db.t4g.medium
       warehouses: "160"
       client_threads: "1,2,4,8,12"
-      instance_type: c8gd.xlarge
+      driver_instance_type: c8gd.xlarge
       disk_size_gb: "32"
       disk_iops: "3000"
     pricing:
@@ -46,7 +46,7 @@ test_points:
       db_instance_class: db.t4g.medium
       warehouses: "16"
       client_threads: "1,2,4,8,12"
-      instance_type: c8gd.xlarge
+      driver_instance_type: c8gd.xlarge
       disk_size_gb: "20"
       disk_iops: "3000"
     pricing:
@@ -57,7 +57,7 @@ test_points:
       db_instance_class: db.m9g.large
       warehouses: "320"
       client_threads: "1,2,4,8,12"
-      instance_type: c8gd.xlarge
+      driver_instance_type: c8gd.xlarge
       disk_size_gb: "64"
       disk_iops: "3000"
     pricing:
@@ -68,7 +68,7 @@ test_points:
       db_instance_class: db.m9g.large
       warehouses: "32"
       client_threads: "1,2,4,8,12"
-      instance_type: c8gd.xlarge
+      driver_instance_type: c8gd.xlarge
       disk_size_gb: "20"
       disk_iops: "3000"
     pricing:
@@ -82,7 +82,7 @@ test_points:
       disk_iops: "12000"
       disk_throughput_mibps: "500"
       client_threads: "1,2,4,8,16,24"
-      instance_type: c8gd.xlarge
+      driver_instance_type: c8gd.xlarge
     pricing:
       disk_type: gp3
       # per https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html — gp3's baseline jumps to 12,000 IOPS/500 MiB/s at >=400 GiB for Postgres
@@ -94,7 +94,7 @@ test_points:
       db_instance_class: db.m9g.xlarge
       warehouses: "64"
       client_threads: "1,2,4,8,16,24"
-      instance_type: c8gd.xlarge
+      driver_instance_type: c8gd.xlarge
       disk_size_gb: "20"
       disk_iops: "3000"
     pricing:
@@ -108,7 +108,7 @@ test_points:
       disk_iops: "12000"
       disk_throughput_mibps: "500"
       client_threads: "1,2,4,8,16,32,48"
-      instance_type: c8gd.2xlarge
+      driver_instance_type: c8gd.2xlarge
     pricing:
       disk_type: gp3
       # per https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html — gp3's baseline jumps to 12,000 IOPS/500 MiB/s at >=400 GiB for Postgres
@@ -121,7 +121,7 @@ test_points:
       db_instance_class: db.m9g.2xlarge
       warehouses: "128"
       client_threads: "1,2,4,8,16,32,48"
-      instance_type: c8gd.2xlarge
+      driver_instance_type: c8gd.2xlarge
       disk_size_gb: "64"
     pricing:
       disk_type: gp3
@@ -132,7 +132,7 @@ test_points:
       db_instance_class: db.m9g.2xlarge
       warehouses: "128"
       client_threads: "1,2,4,8,16,32,48"
-      instance_type: c8gd.2xlarge
+      driver_instance_type: c8gd.2xlarge
       disk_size_gb: "400"
       disk_iops: "12000"
       disk_throughput_mibps: "500"
@@ -150,7 +150,7 @@ test_points:
       db_instance_class: db.m9g.4xlarge
       warehouses: "2560"
       client_threads: "1,2,4,8,16,32,64,96"
-      instance_type: c8gd.4xlarge
+      driver_instance_type: c8gd.4xlarge
       disk_size_gb: "512"
       disk_iops: "20000"
       disk_throughput_mibps: "600"
@@ -165,7 +165,7 @@ test_points:
       db_instance_class: db.m9g.4xlarge
       warehouses: "256"
       client_threads: "1,2,4,8,16,32,64,96"
-      instance_type: c8gd.4xlarge
+      driver_instance_type: c8gd.4xlarge
       disk_size_gb: "400"
       disk_iops: "12000"
       disk_throughput_mibps: "500"
@@ -180,7 +180,7 @@ test_points:
       db_instance_class: db.m9g.4xlarge
       warehouses: "256"
       client_threads: "1,2,4,8,16,32,64,96"
-      instance_type: c8gd.4xlarge
+      driver_instance_type: c8gd.4xlarge
       disk_size_gb: "400"
       disk_iops: "20000"
       disk_throughput_mibps: "600"
@@ -194,7 +194,7 @@ test_points:
       db_instance_class: db.m9g.8xlarge
       warehouses: "5120"
       client_threads: "1,2,4,8,16,32,64,128,192"
-      instance_type: c8gd.8xlarge
+      driver_instance_type: c8gd.8xlarge
       disk_size_gb: "1024"
       disk_iops: "40000"
       disk_throughput_mibps: "1200"
@@ -209,7 +209,7 @@ test_points:
       db_instance_class: db.m9g.8xlarge
       warehouses: "512"
       client_threads: "1,2,4,8,16,32,64,128,192"
-      instance_type: c8gd.8xlarge
+      driver_instance_type: c8gd.8xlarge
       disk_size_gb: "400"
       disk_iops: "12000"
       disk_throughput_mibps: "500"
@@ -224,7 +224,7 @@ test_points:
       db_instance_class: db.m9g.8xlarge
       warehouses: "512"
       client_threads: "1,2,4,8,16,32,64,128,192"
-      instance_type: c8gd.8xlarge
+      driver_instance_type: c8gd.8xlarge
       disk_size_gb: "400"
       disk_iops: "40000"
       disk_throughput_mibps: "1200"

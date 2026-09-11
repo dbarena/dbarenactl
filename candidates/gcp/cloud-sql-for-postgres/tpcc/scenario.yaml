@@ -79,7 +79,7 @@ inputs:
     type: int
     default: 720
     description: Pause time after the initial data load to allow for cooldown
-  instance_type:
+  driver_instance_type:
     type: string
     # Load driver (GCE) machine type, independent of the target's capabilities. 
     # Bump this alongside the target to avoid accidental bottlenecks.
@@ -221,7 +221,7 @@ driver:
     module: ./deployments/gce/loaddriver_gotpc
     vars:
       project_id: "{{ inputs.project_id }}"
-      instance_type: "{{ inputs.instance_type }}"
+      instance_type: "{{ inputs.driver_instance_type }}"
       # Co-location: same VPC/subnetwork/zone as the Cloud SQL target
       network: "{{ target.outputs.network }}"
       subnetwork: "{{ target.outputs.subnetwork }}"

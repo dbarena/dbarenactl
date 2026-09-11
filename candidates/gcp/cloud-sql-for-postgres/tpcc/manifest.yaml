@@ -17,7 +17,7 @@ test_points:
     set:
       warehouses: "160"
       client_threads: "1,2,4,8,12"
-      instance_type: c4a-standard-4
+      driver_instance_type: c4a-standard-4
       disk_size_gb: "32"
       disk_iops: "3000"
       disk_throughput_mibps: "140"
@@ -28,7 +28,7 @@ test_points:
     set:
       warehouses: "16"
       client_threads: "1,2,4,8,12"
-      instance_type: c4a-standard-4
+      driver_instance_type: c4a-standard-4
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_throughput_mibps: "140"
@@ -39,7 +39,7 @@ test_points:
     set:
       warehouses: "320"
       client_threads: "1,2,4,8,12"
-      instance_type: c4a-standard-4
+      driver_instance_type: c4a-standard-4
       disk_size_gb: "64"
       disk_iops: "3000"
       disk_throughput_mibps: "140"
@@ -50,7 +50,7 @@ test_points:
     set:
       warehouses: "32"
       client_threads: "1,2,4,8,12"
-      instance_type: c4a-standard-4
+      driver_instance_type: c4a-standard-4
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_throughput_mibps: "140"
@@ -61,7 +61,7 @@ test_points:
     set:
       warehouses: "640"
       client_threads: "1,2,4,8,16,24"
-      instance_type: c4a-standard-4
+      driver_instance_type: c4a-standard-4
       disk_size_gb: "128"
       disk_iops: "12000"
       disk_throughput_mibps: "149"
@@ -72,7 +72,7 @@ test_points:
     set:
       warehouses: "64"
       client_threads: "1,2,4,8,16,24"
-      instance_type: c4a-standard-4
+      driver_instance_type: c4a-standard-4
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_throughput_mibps: "140"
@@ -83,7 +83,7 @@ test_points:
     set:
       warehouses: "1280"
       client_threads: "1,2,4,8,16,32,48"
-      instance_type: c4a-standard-8
+      driver_instance_type: c4a-standard-8
       disk_size_gb: "256"
       disk_iops: "12000"
       disk_throughput_mibps: "297"
@@ -95,7 +95,7 @@ test_points:
     set:
       warehouses: "128"
       client_threads: "1,2,4,8,16,32,48"
-      instance_type: c4a-standard-8
+      driver_instance_type: c4a-standard-8
       disk_size_gb: "64"
       disk_iops: "6000"
       disk_throughput_mibps: "250"
@@ -107,7 +107,7 @@ test_points:
     set:
       warehouses: "128"
       client_threads: "1,2,4,8,16,32,48"
-      instance_type: c4a-standard-8
+      driver_instance_type: c4a-standard-8
       disk_size_gb: "64"
       disk_iops: "12000"
       disk_throughput_mibps: "300"
@@ -118,7 +118,7 @@ test_points:
     set:
       warehouses: "2560"
       client_threads: "1,2,4,8,16,32,64,96"
-      instance_type: c4a-standard-16
+      driver_instance_type: c4a-standard-16
       disk_size_gb: "512"
       disk_iops: "20000"
       disk_throughput_mibps: "594"
@@ -130,7 +130,7 @@ test_points:
     set:
       warehouses: "256"
       client_threads: "1,2,4,8,16,32,64,96"
-      instance_type: c4a-standard-16
+      driver_instance_type: c4a-standard-16
       disk_size_gb: "128"
       disk_iops: "12000"
       disk_throughput_mibps: "500"
@@ -142,7 +142,7 @@ test_points:
     set:
       warehouses: "256"
       client_threads: "1,2,4,8,16,32,64,96"
-      instance_type: c4a-standard-16
+      driver_instance_type: c4a-standard-16
       disk_size_gb: "128"
       disk_iops: "20000"
       disk_throughput_mibps: "600"
@@ -153,7 +153,7 @@ test_points:
     set:
       warehouses: "5120"
       client_threads: "1,2,4,8,16,32,64,128,192"
-      instance_type: c4a-standard-32
+      driver_instance_type: c4a-standard-32
       disk_size_gb: "1024"
       disk_iops: "40000"
       disk_throughput_mibps: "1188"
@@ -165,7 +165,7 @@ test_points:
     set:
       warehouses: "512"
       client_threads: "1,2,4,8,16,32,64,128,192"
-      instance_type: c4a-standard-32
+      driver_instance_type: c4a-standard-32
       disk_size_gb: "256"
       disk_iops: "12000"
       disk_throughput_mibps: "500"
@@ -177,7 +177,7 @@ test_points:
     set:
       warehouses: "512"
       client_threads: "1,2,4,8,16,32,64,128,192"
-      instance_type: c4a-standard-32
+      driver_instance_type: c4a-standard-32
       disk_size_gb: "256"
       disk_iops: "40000"
       disk_throughput_mibps: "1200"

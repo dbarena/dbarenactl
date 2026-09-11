@@ -69,7 +69,7 @@ inputs:
     type: int
     default: 720
     description: Pause time after the initial data load to allow for cooldown
-  instance_type:
+  driver_instance_type:
     type: string
     # Load driver (EC2) machine type, independent of the target's capabilities. 
     # Bump this alongside the target to avoid accidental bottlenecks.
@@ -191,7 +191,7 @@ driver:
   config:
     module: ./deployments/ec2/loaddriver_gotpc
     vars:
-      instance_type: "{{ inputs.instance_type }}"
+      instance_type: "{{ inputs.driver_instance_type }}"
       region: "{{ inputs.region }}"
       subnet_id: "{{ target.outputs.subnet_id }}"
       vector_enabled: "{{ inputs.metrics_enabled }}"

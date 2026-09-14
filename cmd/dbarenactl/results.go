@@ -187,9 +187,8 @@ func runResults(_ *cobra.Command, args []string) error {
 			continue
 		}
 		if len(successful) < tp.SuccessesNeeded {
-			doc.Reproducibility.Notes = strPtr(fmt.Sprintf(
-				"Only %d/%d configured iterations succeeded; --force was used to emit this result anyway.",
-				len(successful), tp.SuccessesNeeded))
+			fmt.Fprintf(os.Stderr, "warning: %s: only %d/%d configured iterations succeeded; emitting anyway (--force)\n",
+				scenario, len(successful), tp.SuccessesNeeded)
 		}
 
 		data, err := json.MarshalIndent(doc, "", "  ")
@@ -338,7 +337,7 @@ func buildResultDoc(in resultDocInputs) (*resultDoc, error) {
 
 	pricingFetcherKey := in.Manifest.PricingFetcherKey()
 	instance := buildInstanceInfo(in.Snapshot, pricingFetcherKey, pi, sp.CPUArch, sp.EngineVersion)
-	repro := buildReproducibility(in.Manifest, in.TestPoint, in.ManifestPath, sp.BenchctlVersion, sp.GotpcVersion)
+	repro := buildReproducibility(in.TestPoint, in.ManifestPath, sp.BenchctlVersion, sp.GotpcVersion)
 
 	pricingOut, err := computePricing(in.Snapshot, pricingFetcherKey, pi, scenario, sp.Points)
 	if err != nil {
@@ -346,7 +345,7 @@ func buildResultDoc(in resultDocInputs) (*resultDoc, error) {
 	}
 
 	return &resultDoc{
-		SchemaVersion:   "1.2.0",
+		SchemaVersion:   "1.3.0",
 		Provider:        provider,
 		Product:         product,
 		Workload:        in.Manifest.Workload,
@@ -392,8 +391,10 @@ func buildInstanceInfo(snapshot *pricing.Snapshot, pricingFetcherKey string, pi 
 // command. That sidesteps ever needing to redact a run-supplied value (e.g.
 // supabase_org_id) from it, since no --set list is shown at all: every
 // value that would have appeared there (warehouses, disk sizing, ...) is
-// already reported in instance/sweep[].workload_parameters.
-func buildReproducibility(m *manifest.Manifest, tp *sweepstate.TestPoint, manifestPath, benchctlVersion, gotpcVersion string) reproducibility {
+// already reported in instance/sweep[].workload_parameters. The manifest
+// path it names is enough to recover the scenario file too, so the result
+// doesn't repeat it.
+func buildReproducibility(tp *sweepstate.TestPoint, manifestPath, benchctlVersion, gotpcVersion string) reproducibility {
 	absManifestPath, err := filepath.Abs(manifestPath)
 	if err != nil {
 		absManifestPath = manifestPath
@@ -404,12 +405,7 @@ func buildReproducibility(m *manifest.Manifest, tp *sweepstate.TestPoint, manife
 		BenchctlVersion:   strPtr(benchctlVersion),
 		DbarenactlVersion: strPtr(version),
 		LoadGenerator:     loadGeneratorInfo{Name: strPtr("https://github.com/supabase/go-tpc/"), Version: strPtr(gotpcVersion)},
-		ScenarioRepo:      scenarioRepoInfo{URL: nil, Commit: nil},
-		ScenarioPath:      strPtr(repoRelativePath(m.ResolvedScenarioPath())),
 		Command:           strPtr(command),
-		Notes: strPtr("command is the dbarenactl invocation that reproduces this exact test point, not a raw " +
-			"benchctl command -- it omits --set overrides, which are already captured in instance/workload_parameters " +
-			"above. scenario_repo is not currently captured by dbarenactl or benchctl."),
 	}
 }
 

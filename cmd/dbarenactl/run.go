@@ -48,7 +48,7 @@ func init() {
 	runCmd.Flags().StringVar(&runBenchctlBin, "benchctl-bin", "benchctl", "Path to the benchctl binary")
 	runCmd.Flags().StringArrayVar(&runSetParams, "set", nil, "Set a manifest parameter referenced as {{ params.NAME }} in the manifest (key=value, repeatable), e.g. --set supabase_org_id=abc1234")
 	runCmd.Flags().StringVar(&runTestPoint, "test-point", "",
-		"Restrict this sweep to one test point, e.g. small/io or large/io/matched-to-rds (see the manifest's "+
+		"Restrict this sweep to one test point, e.g. small/cache-fit or 2xlarge/cache-fit/performance-optimized (see the manifest's "+
 			"test_points) -- omit to run every test point in the manifest")
 	_ = runCmd.MarkFlagRequired("candidate")
 }

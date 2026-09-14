@@ -48,16 +48,16 @@ func TestPricingSetListShow_RoundTrip(t *testing.T) {
 	}
 
 	setOut := runCLI(t, "pricing", "set", "--candidate", "../../candidates/supabase/supabase/tpcc/manifest.yaml", "--file", itemsFile, "--source", "manual test entry")
-	if !strings.Contains(setOut, "Supabase") || !strings.Contains(setOut, "Items:             1") {
-		t.Errorf("set output = %q, want it to mention provider Supabase and 1 item", setOut)
+	if !strings.Contains(setOut, "Supabase") || !strings.Contains(setOut, "OrioleDB") {
+		t.Errorf("set output = %q, want it to mention both the Supabase and OrioleDB products it shares pricing with", setOut)
 	}
 
 	listOut := runCLI(t, "pricing", "list")
-	if !strings.Contains(listOut, "Supabase") {
-		t.Errorf("list output missing Supabase row: %q", listOut)
+	if !strings.Contains(listOut, "Supabase") || !strings.Contains(listOut, "OrioleDB") {
+		t.Errorf("list output missing Supabase/OrioleDB rows: %q", listOut)
 	}
 
-	showOut := runCLI(t, "pricing", "show", "Supabase")
+	showOut := runCLI(t, "pricing", "show", "Supabase", "--product", "OrioleDB")
 	if !strings.Contains(showOut, "Compute (8XL)") {
 		t.Errorf("show output missing the item description: %q", showOut)
 	}
@@ -92,5 +92,28 @@ func TestNewPricingRegistry_CoversEveryValidProvider(t *testing.T) {
 		if _, ok := reg.Lookup(key); !ok {
 			t.Errorf("no Fetcher registered for provider=%s product=%s plan=%s (key %q)", tc.provider, tc.product, tc.plan, key)
 		}
+	}
+}
+
+func TestSnapshotProducts(t *testing.T) {
+	cases := []struct {
+		name         string
+		provider     string
+		product      string
+		wantProducts []string
+	}{
+		{"supabase vanilla expands to both shared products", "Supabase", "Supabase", []string{"Supabase", "OrioleDB"}},
+		{"supabase OrioleDB expands to both shared products", "Supabase", "OrioleDB", []string{"Supabase", "OrioleDB"}},
+		{"aws is untouched", "AWS", "RDS", []string{"RDS"}},
+		{"gcp is untouched", "GCP", "Cloud SQL for Postgres", []string{"Cloud SQL for Postgres"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &manifest.Manifest{Provider: tc.provider, Product: tc.product}
+			got := snapshotProducts(m)
+			if strings.Join(got, ",") != strings.Join(tc.wantProducts, ",") {
+				t.Errorf("snapshotProducts() = %v, want %v", got, tc.wantProducts)
+			}
+		})
 	}
 }

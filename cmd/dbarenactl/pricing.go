@@ -134,25 +134,28 @@ func runPricingFetch(cmd *cobra.Command, _ []string) error {
 	sp.Succeed(fmt.Sprintf("Fetched %s pricing for %s (%d items, %.1fs)",
 		displayName(m), m.Region, len(result.Items), time.Since(fetchStart).Seconds()))
 
-	id, err := newSnapshotID()
-	if err != nil {
-		return err
-	}
 	store, err := openPricingStore()
 	if err != nil {
 		return err
 	}
 	defer store.Close() //nolint:errcheck
 
-	snap := &pricing.Snapshot{
-		ID: id, Provider: m.Provider, Product: m.Product, Plan: m.Plan, Region: m.Region, Method: pricing.MethodFetch,
-		Source: result.Source, Currency: "USD", FetchedAt: time.Now().UTC(),
-		SourceUpdatedAt: result.SourceUpdatedAt, Items: result.Items,
+	fetchedAt := time.Now().UTC()
+	for _, product := range snapshotProducts(m) {
+		id, err := newSnapshotID()
+		if err != nil {
+			return err
+		}
+		snap := &pricing.Snapshot{
+			ID: id, Provider: m.Provider, Product: product, Plan: m.Plan, Region: m.Region, Method: pricing.MethodFetch,
+			Source: result.Source, Currency: "USD", FetchedAt: fetchedAt,
+			SourceUpdatedAt: result.SourceUpdatedAt, Items: result.Items,
+		}
+		if err := store.CreateSnapshot(snap); err != nil {
+			return err
+		}
+		printSnapshotSummary(snap)
 	}
-	if err := store.CreateSnapshot(snap); err != nil {
-		return err
-	}
-	printSnapshotSummary(snap)
 	return nil
 }
 
@@ -183,26 +186,51 @@ func runPricingSet(_ *cobra.Command, _ []string) error {
 		sourceUpdatedAt = &t
 	}
 
-	id, err := newSnapshotID()
-	if err != nil {
-		return err
-	}
 	store, err := openPricingStore()
 	if err != nil {
 		return err
 	}
 	defer store.Close() //nolint:errcheck
 
-	snap := &pricing.Snapshot{
-		ID: id, Provider: m.Provider, Product: m.Product, Plan: m.Plan, Region: m.Region, Method: pricing.MethodSet,
-		Source: pricingSetSource, Currency: "USD", FetchedAt: time.Now().UTC(),
-		SourceUpdatedAt: sourceUpdatedAt, Items: items,
+	fetchedAt := time.Now().UTC()
+	for _, product := range snapshotProducts(m) {
+		id, err := newSnapshotID()
+		if err != nil {
+			return err
+		}
+		snap := &pricing.Snapshot{
+			ID: id, Provider: m.Provider, Product: product, Plan: m.Plan, Region: m.Region, Method: pricing.MethodSet,
+			Source: pricingSetSource, Currency: "USD", FetchedAt: fetchedAt,
+			SourceUpdatedAt: sourceUpdatedAt, Items: items,
+		}
+		if err := store.CreateSnapshot(snap); err != nil {
+			return err
+		}
+		printSnapshotSummary(snap)
 	}
-	if err := store.CreateSnapshot(snap); err != nil {
-		return err
-	}
-	printSnapshotSummary(snap)
 	return nil
+}
+
+// pricingSharedProducts lists, per provider, every Product value that shares
+// identical billing and should therefore receive its own copy of any
+// fetched/set snapshot -- mirrors why Manifest.PricingFetcherKey() ignores
+// Product for these providers (see its doc comment): Supabase's vanilla and
+// OrioleDB products bill from the same underlying infra/SKUs, so a manifest
+// naming either one must find a snapshot. A provider absent from this map is
+// unaffected: snapshotProducts falls back to the manifest's own Product.
+var pricingSharedProducts = map[string][]string{
+	manifest.ProviderSupabase: {"Supabase", "OrioleDB"},
+}
+
+// snapshotProducts returns every Product value that should receive a copy of
+// m's pricing snapshot when fetched/set, expanded via pricingSharedProducts
+// so one `pricing fetch`/`pricing set` populates every such product's
+// snapshot row at once.
+func snapshotProducts(m *manifest.Manifest) []string {
+	if products, ok := pricingSharedProducts[m.Provider]; ok {
+		return products
+	}
+	return []string{m.Product}
 }
 
 func validatePricingItems(items []pricing.Item) error {

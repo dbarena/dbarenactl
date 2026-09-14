@@ -196,3 +196,57 @@ func TestVCPUAndRAMGB_UnrecognizedProjectSize_Errors(t *testing.T) {
 		t.Fatal("expected an error for an unrecognized project_size")
 	}
 }
+
+// itemSetWithThroughputRate is fullItemSet with disk-gp3-throughput's rate
+// swapped to 0.095 -- reproduces the exact rate that produced the reported
+// amount_usd/detail mismatch bug (0.095 * 125 overage MB/s = 11.875, a value
+// with real information at the third decimal place).
+func itemSetWithThroughputRate(rate float64) []pricing.Item {
+	items := fullItemSet()
+	for i := range items {
+		if items[i].SKU == "disk-gp3-throughput" {
+			items[i].PriceUSD = rate
+		}
+	}
+	return items
+}
+
+// TestCost_DiskThroughputOverage_AmountAndDetailAgree is the regression test
+// for the reported bug: amount_usd=11.875 but detail said "...= $11.88"
+// (Detail's %.2f threw away real sub-cent precision AmountUSD retained).
+// Both must now be derived from the same MoneyDecimals-rounded value.
+func TestCost_DiskThroughputOverage_AmountAndDetailAgree(t *testing.T) {
+	cases := []struct {
+		name           string
+		throughputMbps float64
+		wantAmountUSD  float64
+		wantDetailTail string
+	}{
+		{"overage_125_at_rate_0.095", 250, 11.875, "$11.875"}, // 250-125 included = 125 overage
+		{"overage_375_at_rate_0.095", 500, 35.625, "$35.625"}, // 500-125 included = 375 overage
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Calculator{}
+			bd, err := c.Cost(itemSetWithThroughputRate(0.095), pricing.CostInput{
+				InstanceType: "small", DiskGB: 8, IOPS: 3000, ThroughputMbps: tc.throughputMbps,
+			})
+			if err != nil {
+				t.Fatalf("Cost: %v", err)
+			}
+			var detail string
+			var amount float64
+			for _, comp := range bd.Components {
+				if comp.Name == "disk_throughput_overage" {
+					detail, amount = comp.Detail, comp.AmountUSD
+				}
+			}
+			if amount != tc.wantAmountUSD {
+				t.Errorf("disk_throughput_overage.AmountUSD = %v, want %v", amount, tc.wantAmountUSD)
+			}
+			if !strings.HasSuffix(detail, tc.wantDetailTail) {
+				t.Errorf("disk_throughput_overage.Detail = %q, want it to end with %q", detail, tc.wantDetailTail)
+			}
+		})
+	}
+}

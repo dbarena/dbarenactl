@@ -1,5 +1,7 @@
 package pricing
 
+import "strconv"
+
 // HoursPerMonth is the hours-per-month assumption used to annualize/
 // monthly-ize hourly rates across every provider's cost calculation --
 // matches the dbarena result schema's own pricing.hours_per_month default.
@@ -48,6 +50,34 @@ type CostComponent struct {
 type CostBreakdown struct {
 	Components []CostComponent
 	TotalUSD   float64
+}
+
+// MoneyDecimals is the precision every dollar amount in a CostBreakdown is
+// rounded/formatted to -- 3 decimal places (tenths of a cent), matching
+// modern cloud-billing sub-cent precision rather than whole cents, which
+// would already be lossy for a rate like $0.095/MBps-mo.
+const MoneyDecimals = 3
+
+// RoundTo rounds v to decimals decimal places, using the same strconv
+// machinery fmt's %.*f verb uses internally -- so RoundTo(v, n) is
+// guaranteed to match fmt.Sprintf("%.*f", n, v) exactly, unlike
+// math.Round(v*10^n)/10^n, which can round a different direction near
+// half-unit boundaries due to its own multiplication error.
+func RoundTo(v float64, decimals int) float64 {
+	s := strconv.FormatFloat(v, 'f', decimals, 64)
+	r, _ := strconv.ParseFloat(s, 64)
+	return r
+}
+
+// SumComponents totals a breakdown's components' AmountUSD, rounded to
+// MoneyDecimals -- keeps a breakdown's TotalUSD exactly equal to the sum of
+// what it reports itemized, so the two can never drift or disagree.
+func SumComponents(components []CostComponent) float64 {
+	var total float64
+	for _, c := range components {
+		total += c.AmountUSD
+	}
+	return RoundTo(total, MoneyDecimals)
 }
 
 // Calculator computes a monthly on-demand cost estimate for one instance

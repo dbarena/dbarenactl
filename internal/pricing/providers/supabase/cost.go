@@ -65,13 +65,14 @@ func (Calculator) Cost(items []pricing.Item, in pricing.CostInput) (*pricing.Cos
 	components := []pricing.CostComponent{
 		{
 			Name:      "pro_plan_base_fee",
-			AmountUSD: proItem.PriceUSD,
-			Detail:    fmt.Sprintf("sku=%s $%.2f/month", proItem.SKU, proItem.PriceUSD),
+			AmountUSD: pricing.RoundTo(proItem.PriceUSD, pricing.MoneyDecimals),
+			Detail:    fmt.Sprintf("sku=%s $%.*f/month", proItem.SKU, pricing.MoneyDecimals, pricing.RoundTo(proItem.PriceUSD, pricing.MoneyDecimals)),
 		},
 		{
 			Name:      "compute",
-			AmountUSD: computeItem.PriceUSD,
-			Detail:    fmt.Sprintf("sku=%s project_size=%s $%.2f/month", computeItem.SKU, in.InstanceType, computeItem.PriceUSD),
+			AmountUSD: pricing.RoundTo(computeItem.PriceUSD, pricing.MoneyDecimals),
+			Detail: fmt.Sprintf("sku=%s project_size=%s $%.*f/month", computeItem.SKU, in.InstanceType,
+				pricing.MoneyDecimals, pricing.RoundTo(computeItem.PriceUSD, pricing.MoneyDecimals)),
 		},
 	}
 
@@ -86,22 +87,21 @@ func (Calculator) Cost(items []pricing.Item, in pricing.CostInput) (*pricing.Cos
 		if err != nil {
 			return nil, fmt.Errorf("supabase: cost: parse included_compute_credit_usd %q: %w", proItem.Attributes["included_compute_credit_usd"], err)
 		}
-		creditUSD = amt
+		creditUSD = pricing.RoundTo(amt, pricing.MoneyDecimals)
 		components = append(components, pricing.CostComponent{
 			Name:      "compute_credit",
 			AmountUSD: -creditUSD,
-			Detail:    fmt.Sprintf("Pro plan credit covers one %s instance: -$%.2f/month", in.InstanceType, creditUSD),
+			Detail:    fmt.Sprintf("Pro plan credit covers one %s instance: -$%.*f/month", in.InstanceType, pricing.MoneyDecimals, creditUSD),
 		})
 	}
 
-	diskComponents, diskUSD, err := diskComponents(items, diskType, in)
+	diskComps, err := diskComponents(items, diskType, in)
 	if err != nil {
 		return nil, err
 	}
-	components = append(components, diskComponents...)
+	components = append(components, diskComps...)
 
-	total := proItem.PriceUSD + computeItem.PriceUSD - creditUSD + diskUSD
-	return &pricing.CostBreakdown{Components: components, TotalUSD: total}, nil
+	return &pricing.CostBreakdown{Components: components, TotalUSD: pricing.SumComponents(components)}, nil
 }
 
 // diskComponents prices disk size/IOPS/throughput overage above whatever
@@ -109,70 +109,69 @@ func (Calculator) Cost(items []pricing.Item, in pricing.CostInput) (*pricing.Cos
 // no included_amount, meaning every provisioned unit is billed, and io2 has
 // no separate throughput item at all: pricing.md states its throughput
 // "scales automatically with IOPS", i.e. it is never billed on its own).
-func diskComponents(items []pricing.Item, diskType string, in pricing.CostInput) ([]pricing.CostComponent, float64, error) {
+func diskComponents(items []pricing.Item, diskType string, in pricing.CostInput) ([]pricing.CostComponent, error) {
 	sizeItem, err := findOneItem(items, func(it pricing.Item) bool { return it.SKU == "disk-"+diskType+"-size" },
 		fmt.Sprintf("disk size rate for disk_type %q", diskType))
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	iopsItem, err := findOneItem(items, func(it pricing.Item) bool { return it.SKU == "disk-"+diskType+"-iops" },
 		fmt.Sprintf("disk IOPS rate for disk_type %q", diskType))
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 
 	sizeIncluded, err := includedAmount(sizeItem)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	iopsIncluded, err := includedAmount(iopsItem)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	sizeOverage := maxFloat(0, in.DiskGB-sizeIncluded)
 	iopsOverage := maxFloat(0, in.IOPS-iopsIncluded)
-	sizeUSD := sizeItem.PriceUSD * sizeOverage
-	iopsUSD := iopsItem.PriceUSD * iopsOverage
+	sizeUSD := pricing.RoundTo(sizeItem.PriceUSD*sizeOverage, pricing.MoneyDecimals)
+	iopsUSD := pricing.RoundTo(iopsItem.PriceUSD*iopsOverage, pricing.MoneyDecimals)
 
 	components := []pricing.CostComponent{
 		{
 			Name:      "disk_size_overage",
 			AmountUSD: sizeUSD,
-			Detail: fmt.Sprintf("sku=%s included=%g GB provisioned=%g overage=%g rate=$%.6f/GB-mo = $%.2f",
-				sizeItem.SKU, sizeIncluded, in.DiskGB, sizeOverage, sizeItem.PriceUSD, sizeUSD),
+			Detail: fmt.Sprintf("sku=%s included=%g GB provisioned=%g overage=%g rate=$%.6f/GB-mo = $%.*f",
+				sizeItem.SKU, sizeIncluded, in.DiskGB, sizeOverage, sizeItem.PriceUSD, pricing.MoneyDecimals, sizeUSD),
 		},
 		{
 			Name:      "disk_iops_overage",
 			AmountUSD: iopsUSD,
-			Detail: fmt.Sprintf("sku=%s included=%g IOPS provisioned=%g overage=%g rate=$%.6f/IOPS-mo = $%.2f",
-				iopsItem.SKU, iopsIncluded, in.IOPS, iopsOverage, iopsItem.PriceUSD, iopsUSD),
+			Detail: fmt.Sprintf("sku=%s included=%g IOPS provisioned=%g overage=%g rate=$%.6f/IOPS-mo = $%.*f",
+				iopsItem.SKU, iopsIncluded, in.IOPS, iopsOverage, iopsItem.PriceUSD, pricing.MoneyDecimals, iopsUSD),
 		},
 	}
-	total := sizeUSD + iopsUSD
 
 	if diskType != "gp3" {
 		// io2's throughput "scales automatically with IOPS" per
 		// pricing.md -- never billed as its own line item.
 		components = append(components, pricing.CostComponent{Name: "disk_throughput_overage", AmountUSD: 0, Detail: "io2 throughput scales automatically with IOPS -- not separately billed"})
-		return components, total, nil
+		return components, nil
 	}
 	throughputItem, err := findOneItem(items, func(it pricing.Item) bool { return it.SKU == "disk-gp3-throughput" }, "gp3 disk throughput rate")
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	throughputIncluded, err := includedAmount(throughputItem)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	throughputOverage := maxFloat(0, in.ThroughputMbps-throughputIncluded)
-	throughputUSD := throughputItem.PriceUSD * throughputOverage
+	throughputUSD := pricing.RoundTo(throughputItem.PriceUSD*throughputOverage, pricing.MoneyDecimals)
 	components = append(components, pricing.CostComponent{
 		Name:      "disk_throughput_overage",
 		AmountUSD: throughputUSD,
-		Detail: fmt.Sprintf("sku=%s included=%g MB/s provisioned=%g overage=%g rate=$%.6f/MBps-mo = $%.2f",
-			throughputItem.SKU, throughputIncluded, in.ThroughputMbps, throughputOverage, throughputItem.PriceUSD, throughputUSD),
+		Detail: fmt.Sprintf("sku=%s included=%g MB/s provisioned=%g overage=%g rate=$%.6f/MBps-mo = $%.*f",
+			throughputItem.SKU, throughputIncluded, in.ThroughputMbps, throughputOverage, throughputItem.PriceUSD, pricing.MoneyDecimals, throughputUSD),
 	})
-	return components, total + throughputUSD, nil
+	return components, nil
 }
 
 var includedAmountRe = regexp.MustCompile(`^([\d,]+(?:\.\d+)?)`)

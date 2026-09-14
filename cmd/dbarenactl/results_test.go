@@ -3,12 +3,15 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/dbarena/dbarenactl/internal/manifest"
+	"github.com/dbarena/dbarenactl/internal/pricing"
 	"github.com/dbarena/dbarenactl/internal/sweepstate"
 )
 
@@ -163,6 +166,123 @@ func TestResolvePricingInputs_SupabaseIgnoresStraySetKeys(t *testing.T) {
 
 	if pi.instanceType != "xlarge" {
 		t.Errorf("instanceType = %q, want %q -- db_instance_type in Set must not be read", pi.instanceType, "xlarge")
+	}
+}
+
+// ---- computePricing / buildInstanceInfo: components + disk_type ----
+
+// TestComputePricing_PopulatesComponentsSummingToMonthlyUSD covers the
+// pricing-audit.log replacement: every pricing.CostBreakdown component must
+// come through onto pricingInfo.Components (name, amount, detail intact),
+// summing to exactly MonthlyUSD, and pricing.source must no longer be
+// present in the marshaled JSON (dropped -- see result.schema.json).
+func TestComputePricing_PopulatesComponentsSummingToMonthlyUSD(t *testing.T) {
+	snapshot := &pricing.Snapshot{
+		ID:        "snap-1",
+		FetchedAt: time.Date(2026, 9, 11, 2, 52, 44, 0, time.UTC),
+		Items: []pricing.Item{
+			{SKU: "COMPUTE", Unit: "Hrs", PriceUSD: 0.032, Attributes: map[string]string{"db_instance_type": "db.t4g.small"}},
+			{SKU: "STORAGE", Unit: "GB-Mo", PriceUSD: 0.115, Attributes: map[string]string{"disk_type": "gp3"}},
+			{SKU: "IOPS", Unit: "IOPS-Mo", PriceUSD: 0.02, Attributes: map[string]string{"disk_type": "gp3"}},
+			{SKU: "THROUGHPUT", Unit: "MBPS-Mo", PriceUSD: 0.08},
+		},
+	}
+	diskGB, iops, throughput := 20.0, 3000.0, 125.0
+	pi := pricingInputs{instanceType: "db.t4g.small", diskGB: &diskGB, iops: &iops, throughputMbps: &throughput}
+	points := []sweepPointJSON{{Summary: summaryInfo{Throughput: throughputInfo{Value: 1000}}}}
+
+	out, err := computePricing(snapshot, "aws/rds", pi, "compute-bound-small", points)
+	if err != nil {
+		t.Fatalf("computePricing: %v", err)
+	}
+	if out == nil {
+		t.Fatal("computePricing returned nil pricingInfo, want non-nil")
+	}
+
+	wantNames := map[string]bool{"compute": false, "storage": false, "iops_overage": false, "throughput_overage": false}
+	var gotTotal float64
+	for _, c := range out.Components {
+		if _, ok := wantNames[c.Name]; !ok {
+			t.Errorf("unexpected component %q", c.Name)
+		}
+		wantNames[c.Name] = true
+		gotTotal += c.AmountUSD
+		if c.Detail == "" {
+			t.Errorf("component %q has empty Detail", c.Name)
+		}
+	}
+	for name, seen := range wantNames {
+		if !seen {
+			t.Errorf("Components missing %q", name)
+		}
+	}
+	if math.Abs(gotTotal-out.MonthlyUSD) > 1e-9 {
+		t.Errorf("sum(Components.AmountUSD) = %v, want MonthlyUSD %v", gotTotal, out.MonthlyUSD)
+	}
+	if points[0].Summary.TpmcPerDollarMonth == nil {
+		t.Error("TpmcPerDollarMonth not backfilled onto sweep point")
+	}
+
+	data, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal pricingInfo: %v", err)
+	}
+	if strings.Contains(string(data), `"source"`) {
+		t.Errorf("marshaled pricing JSON still contains \"source\": %s", data)
+	}
+	if !strings.Contains(string(data), `"components"`) {
+		t.Errorf("marshaled pricing JSON missing \"components\": %s", data)
+	}
+}
+
+// TestComputePricing_RoundsTpmcPerDollarMonth covers the reported
+// pseudoprecision bug (e.g. 3.879089433672162): tpmc_per_dollar_month must
+// be rounded to 2 decimal places, not raw float64 division noise.
+func TestComputePricing_RoundsTpmcPerDollarMonth(t *testing.T) {
+	snapshot := &pricing.Snapshot{
+		ID:        "snap-1",
+		FetchedAt: time.Date(2026, 9, 11, 2, 52, 44, 0, time.UTC),
+		Items: []pricing.Item{
+			{SKU: "COMPUTE", Unit: "Hrs", PriceUSD: 0.0317, Attributes: map[string]string{"db_instance_type": "db.t4g.small"}},
+			{SKU: "STORAGE", Unit: "GB-Mo", PriceUSD: 0.115, Attributes: map[string]string{"disk_type": "gp3"}},
+			{SKU: "IOPS", Unit: "IOPS-Mo", PriceUSD: 0.02, Attributes: map[string]string{"disk_type": "gp3"}},
+			{SKU: "THROUGHPUT", Unit: "MBPS-Mo", PriceUSD: 0.08},
+		},
+	}
+	diskGB, iops, throughput := 20.0, 3000.0, 125.0
+	pi := pricingInputs{instanceType: "db.t4g.small", diskGB: &diskGB, iops: &iops, throughputMbps: &throughput}
+	points := []sweepPointJSON{{Summary: summaryInfo{Throughput: throughputInfo{Value: 1000}}}}
+
+	out, err := computePricing(snapshot, "aws/rds", pi, "compute-bound-small", points)
+	if err != nil {
+		t.Fatalf("computePricing: %v", err)
+	}
+
+	got := points[0].Summary.TpmcPerDollarMonth
+	if got == nil {
+		t.Fatal("TpmcPerDollarMonth not backfilled onto sweep point")
+	}
+	want := pricing.RoundTo(1000/out.MonthlyUSD, 2)
+	if *got != want {
+		t.Errorf("TpmcPerDollarMonth = %v, want %v", *got, want)
+	}
+	// Confirm no more than 2 decimal digits survive, not just that RoundTo
+	// was applied to the right inputs.
+	if rounded := pricing.RoundTo(*got, 2); rounded != *got {
+		t.Errorf("TpmcPerDollarMonth = %v has more than 2 decimal digits", *got)
+	}
+}
+
+// TestBuildInstanceInfo_SetsDiskType covers disk_type's move from the
+// (now-removed) pricing-audit.log into result.json's instance block.
+func TestBuildInstanceInfo_SetsDiskType(t *testing.T) {
+	diskGB := 64.0
+	pi := pricingInputs{instanceType: "db.m6g.xlarge", diskType: "gp3", diskGB: &diskGB}
+
+	info := buildInstanceInfo(nil, "aws/rds", pi, "x86_64", "PostgreSQL 17")
+
+	if info.DiskType == nil || *info.DiskType != "gp3" {
+		t.Errorf("DiskType = %v, want %q", info.DiskType, "gp3")
 	}
 }
 

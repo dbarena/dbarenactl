@@ -3,7 +3,7 @@
 // concrete benchctl scenario files and --set overrides.
 //
 // This mapping deliberately lives in data, not Go code: which scenario file
-// and which --set values correspond to e.g. "small, io-bound" is exactly the
+// and which --set values correspond to e.g. "small, cache-exceeding" is exactly the
 // kind of benchmark-tuning knowledge that changes as scenarios evolve, and
 // baking it into the binary would mean a rebuild every time a scenario
 // convention changes.

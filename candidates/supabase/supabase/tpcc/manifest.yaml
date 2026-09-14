@@ -11,7 +11,7 @@ region: us-east-1
 scenario_path: scenario.yaml
 test_points:
   - tier: small
-    bound_type: io
+    bound_type: cache-exceeding
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
       region: "us-east-1"
@@ -23,7 +23,7 @@ test_points:
       client_threads: "1,2,4,8,12"
       driver_instance_type: c8gd.xlarge
   - tier: small
-    bound_type: compute
+    bound_type: cache-fit
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
       region: "us-east-1"
@@ -35,7 +35,7 @@ test_points:
       client_threads: "1,2,4,8,12"
       driver_instance_type: c8gd.xlarge
   - tier: medium
-    bound_type: io
+    bound_type: cache-exceeding
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
       region: "us-east-1"
@@ -48,7 +48,7 @@ test_points:
       client_threads: "1,2,4,8,12"
       driver_instance_type: c8gd.xlarge
   - tier: medium
-    bound_type: compute
+    bound_type: cache-fit
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
       region: "us-east-1"
@@ -60,7 +60,7 @@ test_points:
       client_threads: "1,2,4,8,12"
       driver_instance_type: c8gd.xlarge
   - tier: large
-    bound_type: io
+    bound_type: cache-exceeding
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
       region: "us-east-1"
@@ -73,7 +73,7 @@ test_points:
       client_threads: "1,2,4,8,12"
       driver_instance_type: c8gd.xlarge
   - tier: large
-    bound_type: compute
+    bound_type: cache-fit
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
       region: "us-east-1"
@@ -86,7 +86,7 @@ test_points:
       driver_instance_type: c8gd.xlarge
   # 12,000 IOPS, matching RDS's floor at 400 GiB
   - tier: xlarge
-    bound_type: io
+    bound_type: cache-exceeding
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
       region: "us-east-1"
@@ -99,7 +99,7 @@ test_points:
       client_threads: "1,2,4,8,16,24"
       driver_instance_type: c8gd.xlarge
   - tier: xlarge
-    bound_type: compute
+    bound_type: cache-fit
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
       region: "us-east-1"
@@ -111,7 +111,7 @@ test_points:
       client_threads: "1,2,4,8,16,24"
       driver_instance_type: c8gd.xlarge
   - tier: 2xlarge
-    bound_type: io
+    bound_type: cache-exceeding
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
       region: "us-east-1"
@@ -124,7 +124,7 @@ test_points:
       client_threads: "1,2,4,8,16,32,48"
       driver_instance_type: c8gd.2xlarge
   - tier: 2xlarge
-    bound_type: compute
+    bound_type: cache-fit
     variant: cost-optimized
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
@@ -136,11 +136,11 @@ test_points:
       disk_throughput_mibps: "250"
       client_threads: "1,2,4,8,16,32,48"
       driver_instance_type: c8gd.2xlarge
-  # performance-optimized: matches the io-bound row above's iops (12,000); throughput rounded to
-  # 300 (io-bound's own documented-baseline value is 297) and aligned with GCP's identical
+  # performance-optimized: matches the cache-exceeding row above's iops (12,000); throughput rounded to
+  # 300 (cache-exceeding's own documented-baseline value is 297) and aligned with GCP's identical
   # performance-optimized config at this tier
   - tier: 2xlarge
-    bound_type: compute
+    bound_type: cache-fit
     variant: performance-optimized
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
@@ -153,7 +153,7 @@ test_points:
       client_threads: "1,2,4,8,16,32,48"
       driver_instance_type: c8gd.2xlarge
   - tier: 4xlarge
-    bound_type: io
+    bound_type: cache-exceeding
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
       region: "us-east-1"
@@ -166,7 +166,7 @@ test_points:
       client_threads: "1,2,4,8,16,32,64,96"
       driver_instance_type: c8gd.4xlarge
   - tier: 4xlarge
-    bound_type: compute
+    bound_type: cache-fit
     variant: cost-optimized
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
@@ -179,7 +179,7 @@ test_points:
       client_threads: "1,2,4,8,16,32,64,96"
       driver_instance_type: c8gd.4xlarge
   - tier: 4xlarge
-    bound_type: compute
+    bound_type: cache-fit
     variant: performance-optimized
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
@@ -192,7 +192,7 @@ test_points:
       client_threads: "1,2,4,8,16,32,64,96"
       driver_instance_type: c8gd.4xlarge
   - tier: 8xlarge
-    bound_type: io
+    bound_type: cache-exceeding
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
       region: "us-east-1"
@@ -205,7 +205,7 @@ test_points:
       client_threads: "1,2,4,8,16,32,64,128,192"
       driver_instance_type: c8gd.8xlarge
   - tier: 8xlarge
-    bound_type: compute
+    bound_type: cache-fit
     variant: cost-optimized
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
@@ -218,7 +218,7 @@ test_points:
       client_threads: "1,2,4,8,16,32,64,128,192"
       driver_instance_type: c8gd.8xlarge
   - tier: 8xlarge
-    bound_type: compute
+    bound_type: cache-fit
     variant: performance-optimized
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"

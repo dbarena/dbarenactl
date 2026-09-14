@@ -191,7 +191,7 @@ func TestComputePricing_PopulatesComponentsSummingToMonthlyUSD(t *testing.T) {
 	pi := pricingInputs{instanceType: "db.t4g.small", diskGB: &diskGB, iops: &iops, throughputMbps: &throughput}
 	points := []sweepPointJSON{{Summary: summaryInfo{Throughput: throughputInfo{Value: 1000}}}}
 
-	out, err := computePricing(snapshot, "aws/rds", pi, "compute-bound-small", points)
+	out, err := computePricing(snapshot, "aws/rds", pi, "cache-fit-small", points)
 	if err != nil {
 		t.Fatalf("computePricing: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestComputePricing_RoundsTpmcPerDollarMonth(t *testing.T) {
 	pi := pricingInputs{instanceType: "db.t4g.small", diskGB: &diskGB, iops: &iops, throughputMbps: &throughput}
 	points := []sweepPointJSON{{Summary: summaryInfo{Throughput: throughputInfo{Value: 1000}}}}
 
-	out, err := computePricing(snapshot, "aws/rds", pi, "compute-bound-small", points)
+	out, err := computePricing(snapshot, "aws/rds", pi, "cache-fit-small", points)
 	if err != nil {
 		t.Fatalf("computePricing: %v", err)
 	}

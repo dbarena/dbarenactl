@@ -30,6 +30,7 @@ type instanceInfo struct {
 	DiskGB         *float64 `json:"disk_gb"`
 	IOPS           *float64 `json:"iops"`
 	ThroughputMbps *float64 `json:"throughput_mbps"`
+	DiskType       *string  `json:"disk_type"`
 	CPUArch        *string  `json:"cpu_arch"`
 	EngineVersion  *string  `json:"engine_version"`
 }
@@ -55,11 +56,21 @@ type reproducibility struct {
 }
 
 type pricingInfo struct {
-	MonthlyUSD    float64 `json:"monthly_usd"`
-	HoursPerMonth float64 `json:"hours_per_month"`
-	PricingModel  string  `json:"pricing_model"`
-	Source        *string `json:"source"`
-	FetchedAt     *string `json:"fetched_at"`
+	MonthlyUSD    float64             `json:"monthly_usd"`
+	HoursPerMonth float64             `json:"hours_per_month"`
+	PricingModel  string              `json:"pricing_model"`
+	FetchedAt     *string             `json:"fetched_at"`
+	Components    []costComponentJSON `json:"components"`
+}
+
+// costComponentJSON mirrors pricing.CostComponent -- one named, itemized
+// part of a pricing.monthly_usd total, e.g. "compute", "storage",
+// "iops_overage". Discounts/credits are represented the same way, with a
+// negative AmountUSD.
+type costComponentJSON struct {
+	Name      string  `json:"name"`
+	AmountUSD float64 `json:"amount_usd"`
+	Detail    string  `json:"detail"`
 }
 
 type iterationEntry struct {

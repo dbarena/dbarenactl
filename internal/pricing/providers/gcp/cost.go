@@ -179,9 +179,9 @@ func (Calculator) Cost(items []pricing.Item, in pricing.CostInput) (*pricing.Cos
 		if err != nil {
 			return nil, err
 		}
-		iopsUSD = iopsItem.PriceUSD * iopsOverage
-		iopsDetail = fmt.Sprintf("sku=%s baseline=%g (%s) provisioned=%g overage=%g rate=$%.6f/IOPS-mo = $%.2f",
-			iopsItem.SKU, baselineIOPS, baselineIOPSSource, in.IOPS, iopsOverage, iopsItem.PriceUSD, iopsUSD)
+		iopsUSD = pricing.RoundTo(iopsItem.PriceUSD*iopsOverage, pricing.MoneyDecimals)
+		iopsDetail = fmt.Sprintf("sku=%s baseline=%g (%s) provisioned=%g overage=%g rate=$%.6f/IOPS-mo = $%.*f",
+			iopsItem.SKU, baselineIOPS, baselineIOPSSource, in.IOPS, iopsOverage, iopsItem.PriceUSD, pricing.MoneyDecimals, iopsUSD)
 	}
 	if throughputOverage > 0 {
 		throughputItem, err := findOneItem(items, func(it pricing.Item) bool {
@@ -192,9 +192,9 @@ func (Calculator) Cost(items []pricing.Item, in pricing.CostInput) (*pricing.Cos
 		if err != nil {
 			return nil, err
 		}
-		throughputUSD = throughputItem.PriceUSD * throughputOverage
-		throughputDetail = fmt.Sprintf("sku=%s baseline=%g MiB/s (%s) provisioned=%g overage=%g rate=$%.6f/MiBps-mo = $%.2f",
-			throughputItem.SKU, baselineThroughput, baselineThroughputSource, in.ThroughputMbps, throughputOverage, throughputItem.PriceUSD, throughputUSD)
+		throughputUSD = pricing.RoundTo(throughputItem.PriceUSD*throughputOverage, pricing.MoneyDecimals)
+		throughputDetail = fmt.Sprintf("sku=%s baseline=%g MiB/s (%s) provisioned=%g overage=%g rate=$%.6f/MiBps-mo = $%.*f",
+			throughputItem.SKU, baselineThroughput, baselineThroughputSource, in.ThroughputMbps, throughputOverage, throughputItem.PriceUSD, pricing.MoneyDecimals, throughputUSD)
 	}
 
 	var dataCacheUSD float64
@@ -217,40 +217,41 @@ func (Calculator) Cost(items []pricing.Item, in pricing.CostInput) (*pricing.Cos
 		if err != nil {
 			return nil, err
 		}
-		dataCacheUSD = dataCacheItem.PriceUSD * in.DataCacheGB
-		dataCacheDetail = fmt.Sprintf("sku=%s rate=$%.6f/GiB-mo x %g GB = $%.2f",
-			dataCacheItem.SKU, dataCacheItem.PriceUSD, in.DataCacheGB, dataCacheUSD)
+		dataCacheUSD = pricing.RoundTo(dataCacheItem.PriceUSD*in.DataCacheGB, pricing.MoneyDecimals)
+		dataCacheDetail = fmt.Sprintf("sku=%s rate=$%.6f/GiB-mo x %g GB = $%.*f",
+			dataCacheItem.SKU, dataCacheItem.PriceUSD, in.DataCacheGB, pricing.MoneyDecimals, dataCacheUSD)
 	}
 
-	vcpuUSD := vcpuItem.PriceUSD * pt.VCPU * pricing.HoursPerMonth
-	ramUSD := ramItem.PriceUSD * pt.RAMGB * pricing.HoursPerMonth
-	storageUSD := storageItem.PriceUSD * in.DiskGB
+	vcpuUSD := pricing.RoundTo(vcpuItem.PriceUSD*pt.VCPU*pricing.HoursPerMonth, pricing.MoneyDecimals)
+	ramUSD := pricing.RoundTo(ramItem.PriceUSD*pt.RAMGB*pricing.HoursPerMonth, pricing.MoneyDecimals)
+	storageUSD := pricing.RoundTo(storageItem.PriceUSD*in.DiskGB, pricing.MoneyDecimals)
 
-	breakdown := &pricing.CostBreakdown{
-		Components: []pricing.CostComponent{
-			{
-				Name:      "compute_vcpu",
-				AmountUSD: vcpuUSD,
-				Detail: fmt.Sprintf("sku=%s tier=%s vcpu=%g rate=$%.6f/vcpu-hr x %d hr = $%.2f",
-					vcpuItem.SKU, in.InstanceType, pt.VCPU, vcpuItem.PriceUSD, pricing.HoursPerMonth, vcpuUSD),
-			},
-			{
-				Name:      "compute_ram",
-				AmountUSD: ramUSD,
-				Detail: fmt.Sprintf("sku=%s ram_gb=%g rate=$%.6f/GiB-hr x %d hr = $%.2f",
-					ramItem.SKU, pt.RAMGB, ramItem.PriceUSD, pricing.HoursPerMonth, ramUSD),
-			},
-			{
-				Name:      "storage",
-				AmountUSD: storageUSD,
-				Detail: fmt.Sprintf("sku=%s rate=$%.6f/GiB-mo x %g GB = $%.2f",
-					storageItem.SKU, storageItem.PriceUSD, in.DiskGB, storageUSD),
-			},
-			{Name: "iops_overage", AmountUSD: iopsUSD, Detail: iopsDetail},
-			{Name: "throughput_overage", AmountUSD: throughputUSD, Detail: throughputDetail},
-			{Name: "data_cache", AmountUSD: dataCacheUSD, Detail: dataCacheDetail},
+	components := []pricing.CostComponent{
+		{
+			Name:      "compute_vcpu",
+			AmountUSD: vcpuUSD,
+			Detail: fmt.Sprintf("sku=%s tier=%s vcpu=%g rate=$%.6f/vcpu-hr x %d hr = $%.*f",
+				vcpuItem.SKU, in.InstanceType, pt.VCPU, vcpuItem.PriceUSD, pricing.HoursPerMonth, pricing.MoneyDecimals, vcpuUSD),
 		},
-		TotalUSD: vcpuUSD + ramUSD + storageUSD + iopsUSD + throughputUSD + dataCacheUSD,
+		{
+			Name:      "compute_ram",
+			AmountUSD: ramUSD,
+			Detail: fmt.Sprintf("sku=%s ram_gb=%g rate=$%.6f/GiB-hr x %d hr = $%.*f",
+				ramItem.SKU, pt.RAMGB, ramItem.PriceUSD, pricing.HoursPerMonth, pricing.MoneyDecimals, ramUSD),
+		},
+		{
+			Name:      "storage",
+			AmountUSD: storageUSD,
+			Detail: fmt.Sprintf("sku=%s rate=$%.6f/GiB-mo x %g GB = $%.*f",
+				storageItem.SKU, storageItem.PriceUSD, in.DiskGB, pricing.MoneyDecimals, storageUSD),
+		},
+		{Name: "iops_overage", AmountUSD: iopsUSD, Detail: iopsDetail},
+		{Name: "throughput_overage", AmountUSD: throughputUSD, Detail: throughputDetail},
+		{Name: "data_cache", AmountUSD: dataCacheUSD, Detail: dataCacheDetail},
+	}
+	breakdown := &pricing.CostBreakdown{
+		Components: components,
+		TotalUSD:   pricing.SumComponents(components),
 	}
 	return breakdown, nil
 }

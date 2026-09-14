@@ -340,7 +340,7 @@ func buildResultDoc(in resultDocInputs) (*resultDoc, error) {
 	instance := buildInstanceInfo(in.Snapshot, pricingFetcherKey, pi, sp.CPUArch, sp.EngineVersion)
 	repro := buildReproducibility(in.Manifest, in.TestPoint, in.ManifestPath, sp.BenchctlVersion, sp.GotpcVersion)
 
-	pricingOut, err := computePricing(in.Snapshot, pricingFetcherKey, pi, in.TestPoint.SweepID, scenario, sp.Points)
+	pricingOut, err := computePricing(in.Snapshot, pricingFetcherKey, pi, scenario, sp.Points)
 	if err != nil {
 		return nil, err
 	}
@@ -381,6 +381,7 @@ func buildInstanceInfo(snapshot *pricing.Snapshot, pricingFetcherKey string, pi 
 		DiskGB:         pi.diskGB,
 		IOPS:           pi.iops,
 		ThroughputMbps: pi.throughputMbps,
+		DiskType:       strPtr(pi.diskType),
 		CPUArch:        strPtr(cpuArch),
 		EngineVersion:  strPtr(engineVersion),
 	}
@@ -420,7 +421,7 @@ func buildReproducibility(m *manifest.Manifest, tp *sweepstate.TestPoint, manife
 // bug, and today the caller treats it as fatal for this test point); a
 // per-run cost-computation failure is a warning (pricing: null), not an
 // error.
-func computePricing(snapshot *pricing.Snapshot, pricingFetcherKey string, pi pricingInputs, sweepID, scenario string, points []sweepPointJSON) (*pricingInfo, error) {
+func computePricing(snapshot *pricing.Snapshot, pricingFetcherKey string, pi pricingInputs, scenario string, points []sweepPointJSON) (*pricingInfo, error) {
 	if snapshot == nil {
 		return nil, nil
 	}
@@ -449,17 +450,22 @@ func computePricing(snapshot *pricing.Snapshot, pricingFetcherKey string, pi pri
 		fmt.Fprintf(os.Stderr, "warning: %s: could not compute pricing: %v -- writing pricing: null\n", scenario, err)
 		return nil, nil
 	}
-	if err := appendPricingAuditLog(sweepID, scenario, costInput, snapshot, breakdown); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: %s: could not write pricing audit log: %v\n", scenario, err)
+	components := make([]costComponentJSON, len(breakdown.Components))
+	for i, c := range breakdown.Components {
+		components[i] = costComponentJSON{Name: c.Name, AmountUSD: c.AmountUSD, Detail: c.Detail}
 	}
 	pricingOut := &pricingInfo{
 		MonthlyUSD: breakdown.TotalUSD, HoursPerMonth: pricing.HoursPerMonth,
 		PricingModel: "on-demand-list-price",
-		Source:       strPtr(fmt.Sprintf("dbarenactl pricing snapshot %s", snapshot.ID)),
 		FetchedAt:    strPtr(snapshot.FetchedAt.UTC().Format(time.RFC3339)),
+		Components:   components,
 	}
 	for i := range points {
-		v := points[i].Summary.Throughput.Value / pricingOut.MonthlyUSD
+		// tpmc_per_dollar_month is a throughput/dollar ratio, not currency --
+		// rounded to 2 decimal places (a separate policy from
+		// pricing.MoneyDecimals) to drop float64 division noise without
+		// implying more precision than the underlying measurement supports.
+		v := pricing.RoundTo(points[i].Summary.Throughput.Value/pricingOut.MonthlyUSD, 2)
 		points[i].Summary.TpmcPerDollarMonth = &v
 	}
 	return pricingOut, nil

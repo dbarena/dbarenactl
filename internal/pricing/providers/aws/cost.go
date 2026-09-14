@@ -87,41 +87,42 @@ func (Calculator) Cost(items []pricing.Item, in pricing.CostInput) (*pricing.Cos
 		baselineThroughput, baselineThroughputSource = *in.DiskBaselineThroughputMbps, "pricing.disk_baseline_throughput_mibps"
 	}
 
-	computeUSD := computeItem.PriceUSD * pricing.HoursPerMonth
-	storageUSD := storageItem.PriceUSD * in.DiskGB
+	computeUSD := pricing.RoundTo(computeItem.PriceUSD*pricing.HoursPerMonth, pricing.MoneyDecimals)
+	storageUSD := pricing.RoundTo(storageItem.PriceUSD*in.DiskGB, pricing.MoneyDecimals)
 	iopsOverage := maxFloat(0, in.IOPS-baselineIOPS)
-	iopsUSD := iopsItem.PriceUSD * iopsOverage
+	iopsUSD := pricing.RoundTo(iopsItem.PriceUSD*iopsOverage, pricing.MoneyDecimals)
 	throughputOverage := maxFloat(0, in.ThroughputMbps-baselineThroughput)
-	throughputUSD := throughputItem.PriceUSD * throughputOverage
+	throughputUSD := pricing.RoundTo(throughputItem.PriceUSD*throughputOverage, pricing.MoneyDecimals)
 
-	breakdown := &pricing.CostBreakdown{
-		Components: []pricing.CostComponent{
-			{
-				Name:      "compute",
-				AmountUSD: computeUSD,
-				Detail: fmt.Sprintf("sku=%s instance_type=%s rate=$%.6f/hr x %d hr = $%.2f",
-					computeItem.SKU, in.InstanceType, computeItem.PriceUSD, pricing.HoursPerMonth, computeUSD),
-			},
-			{
-				Name:      "storage",
-				AmountUSD: storageUSD,
-				Detail: fmt.Sprintf("sku=%s disk_type=%s rate=$%.6f/GB-mo x %g GB = $%.2f",
-					storageItem.SKU, diskType, storageItem.PriceUSD, in.DiskGB, storageUSD),
-			},
-			{
-				Name:      "iops_overage",
-				AmountUSD: iopsUSD,
-				Detail: fmt.Sprintf("sku=%s baseline=%g (%s) provisioned=%g overage=%g rate=$%.6f/IOPS-mo = $%.2f",
-					iopsItem.SKU, baselineIOPS, baselineIOPSSource, in.IOPS, iopsOverage, iopsItem.PriceUSD, iopsUSD),
-			},
-			{
-				Name:      "throughput_overage",
-				AmountUSD: throughputUSD,
-				Detail: fmt.Sprintf("sku=%s baseline=%g MiB/s (%s) provisioned=%g overage=%g rate=$%.6f/MiBps-mo = $%.2f",
-					throughputItem.SKU, baselineThroughput, baselineThroughputSource, in.ThroughputMbps, throughputOverage, throughputItem.PriceUSD, throughputUSD),
-			},
+	components := []pricing.CostComponent{
+		{
+			Name:      "compute",
+			AmountUSD: computeUSD,
+			Detail: fmt.Sprintf("sku=%s instance_type=%s rate=$%.6f/hr x %d hr = $%.*f",
+				computeItem.SKU, in.InstanceType, computeItem.PriceUSD, pricing.HoursPerMonth, pricing.MoneyDecimals, computeUSD),
 		},
-		TotalUSD: computeUSD + storageUSD + iopsUSD + throughputUSD,
+		{
+			Name:      "storage",
+			AmountUSD: storageUSD,
+			Detail: fmt.Sprintf("sku=%s disk_type=%s rate=$%.6f/GB-mo x %g GB = $%.*f",
+				storageItem.SKU, diskType, storageItem.PriceUSD, in.DiskGB, pricing.MoneyDecimals, storageUSD),
+		},
+		{
+			Name:      "iops_overage",
+			AmountUSD: iopsUSD,
+			Detail: fmt.Sprintf("sku=%s baseline=%g (%s) provisioned=%g overage=%g rate=$%.6f/IOPS-mo = $%.*f",
+				iopsItem.SKU, baselineIOPS, baselineIOPSSource, in.IOPS, iopsOverage, iopsItem.PriceUSD, pricing.MoneyDecimals, iopsUSD),
+		},
+		{
+			Name:      "throughput_overage",
+			AmountUSD: throughputUSD,
+			Detail: fmt.Sprintf("sku=%s baseline=%g MiB/s (%s) provisioned=%g overage=%g rate=$%.6f/MiBps-mo = $%.*f",
+				throughputItem.SKU, baselineThroughput, baselineThroughputSource, in.ThroughputMbps, throughputOverage, throughputItem.PriceUSD, pricing.MoneyDecimals, throughputUSD),
+		},
+	}
+	breakdown := &pricing.CostBreakdown{
+		Components: components,
+		TotalUSD:   pricing.SumComponents(components),
 	}
 	return breakdown, nil
 }

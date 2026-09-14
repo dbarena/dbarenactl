@@ -8,7 +8,7 @@ region: us-east-1
 scenario_path: scenario.yaml
 test_points:
   - tier: small
-    bound_type: io
+    bound_type: cache-exceeding
     set:
       db_instance_class: db.t4g.small
       warehouses: "80"
@@ -19,7 +19,7 @@ test_points:
     pricing:
       disk_type: gp3
   - tier: small
-    bound_type: compute
+    bound_type: cache-fit
     set:
       db_instance_class: db.t4g.small
       warehouses: "8"
@@ -30,7 +30,7 @@ test_points:
     pricing:
       disk_type: gp3
   - tier: medium
-    bound_type: io
+    bound_type: cache-exceeding
     set:
       db_instance_class: db.t4g.medium
       warehouses: "160"
@@ -41,7 +41,7 @@ test_points:
     pricing:
       disk_type: gp3
   - tier: medium
-    bound_type: compute
+    bound_type: cache-fit
     set:
       db_instance_class: db.t4g.medium
       warehouses: "16"
@@ -52,7 +52,7 @@ test_points:
     pricing:
       disk_type: gp3
   - tier: large
-    bound_type: io
+    bound_type: cache-exceeding
     set:
       db_instance_class: db.m9g.large
       warehouses: "320"
@@ -63,7 +63,7 @@ test_points:
     pricing:
       disk_type: gp3
   - tier: large
-    bound_type: compute
+    bound_type: cache-fit
     set:
       db_instance_class: db.m9g.large
       warehouses: "32"
@@ -74,7 +74,7 @@ test_points:
     pricing:
       disk_type: gp3
   - tier: xlarge
-    bound_type: io
+    bound_type: cache-exceeding
     set:
       db_instance_class: db.m9g.xlarge
       warehouses: "640"
@@ -89,7 +89,7 @@ test_points:
       disk_baseline_iops: "12000"
       disk_baseline_throughput_mibps: "500"
   - tier: xlarge
-    bound_type: compute
+    bound_type: cache-fit
     set:
       db_instance_class: db.m9g.xlarge
       warehouses: "64"
@@ -100,7 +100,7 @@ test_points:
     pricing:
       disk_type: gp3
   - tier: 2xlarge
-    bound_type: io
+    bound_type: cache-exceeding
     set:
       db_instance_class: db.m9g.2xlarge
       warehouses: "1280"
@@ -115,7 +115,7 @@ test_points:
       disk_baseline_iops: "12000"
       disk_baseline_throughput_mibps: "500"
   - tier: 2xlarge
-    bound_type: compute
+    bound_type: cache-fit
     variant: cost-optimized
     set:
       db_instance_class: db.m9g.2xlarge
@@ -126,7 +126,7 @@ test_points:
     pricing:
       disk_type: gp3
   - tier: 2xlarge
-    bound_type: compute
+    bound_type: cache-fit
     variant: performance-optimized
     set:
       db_instance_class: db.m9g.2xlarge
@@ -145,7 +145,7 @@ test_points:
   # For pricing calculation we still need to state explicitly that >=400 GiB
   # the free baseline IOPS/throughput changes.
   - tier: 4xlarge
-    bound_type: io
+    bound_type: cache-exceeding
     set:
       db_instance_class: db.m9g.4xlarge
       warehouses: "2560"
@@ -159,7 +159,7 @@ test_points:
       disk_baseline_iops: "12000"
       disk_baseline_throughput_mibps: "500"
   - tier: 4xlarge
-    bound_type: compute
+    bound_type: cache-fit
     variant: cost-optimized
     set:
       db_instance_class: db.m9g.4xlarge
@@ -174,7 +174,7 @@ test_points:
       disk_baseline_iops: "12000"
       disk_baseline_throughput_mibps: "500"
   - tier: 4xlarge
-    bound_type: compute
+    bound_type: cache-fit
     variant: performance-optimized
     set:
       db_instance_class: db.m9g.4xlarge
@@ -189,7 +189,7 @@ test_points:
       disk_baseline_iops: "12000"
       disk_baseline_throughput_mibps: "500"
   - tier: 8xlarge
-    bound_type: io
+    bound_type: cache-exceeding
     set:
       db_instance_class: db.m9g.8xlarge
       warehouses: "5120"
@@ -203,7 +203,7 @@ test_points:
       disk_baseline_iops: "12000"
       disk_baseline_throughput_mibps: "500"
   - tier: 8xlarge
-    bound_type: compute
+    bound_type: cache-fit
     variant: cost-optimized
     set:
       db_instance_class: db.m9g.8xlarge
@@ -218,7 +218,7 @@ test_points:
       disk_baseline_iops: "12000"
       disk_baseline_throughput_mibps: "500"
   - tier: 8xlarge
-    bound_type: compute
+    bound_type: cache-fit
     variant: performance-optimized
     set:
       db_instance_class: db.m9g.8xlarge

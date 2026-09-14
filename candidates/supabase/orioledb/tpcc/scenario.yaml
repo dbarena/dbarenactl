@@ -186,16 +186,7 @@ suite:
             threads: "{{ fixture.client_threads }}"
             time: "{{ inputs.warmup_duration }}"
         - name: get-wal-size-before-benchmark
-          # Disk-sizing signal (see docs/compute-bound-calibration-plan-2026-09.md §9/§11 and
-          # docs/compute-bound-sizing-formula-2026-09.md §5-7). pg_stat_wal is still valid for
-          # OrioleDB -- WAL generation is a core Postgres mechanism this engine still uses --
-          # unlike pg_stat_io/pg_stat_checkpointer/pg_stat_database below, which are NOT (see the
-          # orioledb-footprint comment below for why those are omitted from this scenario
-          # entirely). Bracketed before/after the benchmark step since wal_bytes is cumulative
-          # since stats_reset, not since this run started -- the delta is this window's actual
-          # WAL volume, one part of this engine's disk-throughput demand (the part core WAL
-          # covers; it does not include OrioleDB's own data-file/undo-log I/O, which pg_stat_wal
-          # cannot see).
+          # Disk-sizing signal
           type: metadata
           command: sql
           args:
@@ -203,19 +194,7 @@ suite:
             query: >-
               SELECT 'wal_bytes=' || wal_bytes FROM pg_stat_wal
         - name: get-db-size-before-benchmark
-          # OrioleDB-specific disk-size signal, standing in for the standard
-          # pg_stat_io/pg_stat_checkpointer/pg_stat_database views this scenario deliberately
-          # does NOT query: a 2026-09-04 full-30-minute-duration run confirmed those three
-          # report near-zero/nonsensical deltas for OrioleDB (e.g. pg_stat_checkpointer showed
-          # 770 buffers written across 8 million real transactions) because OrioleDB's storage
-          # engine bypasses the standard heap-AM accounting those views rely on entirely -- see
-          # docs/compute-bound-calibration-plan-2026-09.md §11 for the full finding. This query
-          # (from that doc's §6, already confirmed accurate via a byte-for-byte `du -sh
-          # /data/pgdata` cross-check in a prior session) sums data + WAL + undo log directly,
-          # which is the one capacity signal that IS valid for this engine. Bracketed
-          # before/after for the same cumulative-counter reason as wal_stats above -- the delta
-          # is this window's actual footprint growth, a lower-bound proxy for write demand (it
-          # won't capture in-place overwrites that don't grow total size).
+          # OrioleDB-specific disk-size signal
           type: metadata
           command: sql
           args:

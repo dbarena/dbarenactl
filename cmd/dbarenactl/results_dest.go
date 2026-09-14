@@ -56,10 +56,10 @@ func slugify(s string) string {
 }
 
 // scenarioSlug folds bound_type + tier [+ variant] into the directory/file
-// naming dbarena's results tree uses, e.g. "io-bound-small",
-// "io-bound-large-matched-to-rds".
+// naming dbarena's results tree uses, e.g. "cache-exceeding-small",
+// "cache-exceeding-large-matched-to-rds".
 func scenarioSlug(boundType, tier, variant string) string {
-	slug := slugify(boundType) + "-bound-" + slugify(tier)
+	slug := slugify(boundType) + "-" + slugify(tier)
 	if variant != "" {
 		slug += "-" + slugify(variant)
 	}

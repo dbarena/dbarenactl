@@ -17,11 +17,10 @@ import (
 // looking for a `.git` entry -- a file (worktrees like
 // benchctl-test-points-no-tiers) or a directory (an ordinary checkout) both
 // satisfy this, so it works uniformly for either. Falls back to returning
-// absPath unchanged if no `.git` ancestor is found. This is what keeps
-// reproducibility fields (scenario_path, the manifest path embedded in
-// `command`) portable across machines instead of leaking a local
-// /Users/... path -- and automatically follows a scenario/manifest file to
-// wherever it's relocated, since it never hardcodes a repo name.
+// absPath unchanged if no `.git` ancestor is found. This is what keeps the
+// manifest path embedded in reproducibility.command portable across machines
+// instead of leaking a local /Users/... path -- and automatically follows a
+// manifest to wherever it's relocated, since it never hardcodes a repo name.
 func repoRelativePath(absPath string) string {
 	dir := filepath.Dir(absPath)
 	for {
@@ -57,7 +56,7 @@ func slugify(s string) string {
 
 // scenarioSlug folds bound_type + tier [+ variant] into the directory/file
 // naming dbarena's results tree uses, e.g. "cache-exceeding-small",
-// "cache-exceeding-large-matched-to-rds".
+// "cache-fit-2xlarge-performance-optimized".
 func scenarioSlug(boundType, tier, variant string) string {
 	slug := slugify(boundType) + "-" + slugify(tier)
 	if variant != "" {

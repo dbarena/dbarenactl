@@ -40,19 +40,11 @@ type loadGeneratorInfo struct {
 	Version *string `json:"version"`
 }
 
-type scenarioRepoInfo struct {
-	URL    *string `json:"url"`
-	Commit *string `json:"commit"`
-}
-
 type reproducibility struct {
 	BenchctlVersion   *string           `json:"benchctl_version"`
 	DbarenactlVersion *string           `json:"dbarenactl_version"`
 	LoadGenerator     loadGeneratorInfo `json:"load_generator"`
-	ScenarioRepo      scenarioRepoInfo  `json:"scenario_repo"`
-	ScenarioPath      *string           `json:"scenario_path"`
 	Command           *string           `json:"command"`
-	Notes             *string           `json:"notes,omitempty"`
 }
 
 type pricingInfo struct {

@@ -59,7 +59,6 @@ test_points:
       disk_throughput_mibps: "125"
       client_threads: "1,2,4,8,12"
       driver_instance_type: c8gd.xlarge
-  # 3,000 IOPS, matching RDS's gp3 floor rather than Supabase's own default
   - tier: large
     bound_type: cache-exceeding
     set:

@@ -140,27 +140,15 @@ suite:
             query: >-
               SELECT string_agg(name || '=' || setting, ', ' ORDER BY name) FROM pg_settings WHERE name IN ('shared_buffers', 'work_mem', 'max_connections', 'effective_cache_size')
         - name: network-rtt-baseline
-          # Runs on the driver (the EC2 instance, once bootstrapped) — a TCP
-          # connect-timing loop against the target host/port. Doesn't fix the
-          # fact that Supabase's AZ placement isn't controllable by us (unlike
-          # the pinned-AZ RDS scenario), but lets the results doc quantify how
-          # much of any throughput gap traces to network path vs. engine/hardware.
-          type: shell
+          # Round trips from the driver (the EC2 instance, once bootstrapped) to
+          # the target. Doesn't fix the fact that Supabase's AZ placement isn't
+          # controllable by us (unlike the pinned-AZ RDS scenario), but lets the
+          # results doc quantify how much of any throughput gap traces to network
+          # path vs. engine/hardware. Reported in microseconds.
+          type: metadata
+          command: rtt
           args:
-            command: |
-              bash -c '
-                for i in $(seq 1 10); do
-                  start_ns=$(date +%s%N)
-                  timeout 5 bash -c "exec 3<>/dev/tcp/{{ target.outputs.host }}/{{ target.outputs.port }}" 2>/dev/null
-                  status=$?
-                  end_ns=$(date +%s%N)
-                  if [ $status -eq 0 ]; then
-                    echo "network-rtt-baseline: tcp_connect_ms=$(( (end_ns - start_ns) / 1000000 ))"
-                  else
-                    echo "network-rtt-baseline: tcp_connect_ms=timeout"
-                  fi
-                done
-              '
+            name: network_rtt
         - name: prepare-warehouses
           type: go-tpc
           command: prepare

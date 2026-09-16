@@ -305,6 +305,55 @@ func pgVersionInfo(records []metricRecord) (version, cpuArch string) {
 	return "", ""
 }
 
+// networkRTTInfo returns the driver-to-target round trip parsed from a
+// network_rtt metadata record, if present at this concurrency level. A record
+// that is absent or malformed yields nil: runs made before the probe existed
+// have no such record, and one unreadable value shouldn't block publishing an
+// otherwise good Result.
+func networkRTTInfo(records []metricRecord) *networkInfo {
+	for _, r := range records {
+		if r.Name != "network_rtt" {
+			continue
+		}
+		v, err := r.stringValue()
+		if err != nil {
+			continue
+		}
+		return parseNetworkRTT(v)
+	}
+	return nil
+}
+
+// parseNetworkRTT reads benchctl's "min_us=96, median_us=154, p99_us=299,
+// max_us=337, samples=200" summary. It returns nil unless every field is
+// present and numeric, so a partial parse never publishes a half-filled block.
+func parseNetworkRTT(value string) *networkInfo {
+	fields := map[string]int64{}
+	for _, part := range strings.Split(value, ",") {
+		key, raw, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok {
+			continue
+		}
+		n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err != nil {
+			continue
+		}
+		fields[strings.TrimSpace(key)] = n
+	}
+	for _, key := range []string{"min_us", "median_us", "p99_us", "max_us", "samples"} {
+		if _, ok := fields[key]; !ok {
+			return nil
+		}
+	}
+	return &networkInfo{
+		RTTMinUs:    fields["min_us"],
+		RTTMedianUs: fields["median_us"],
+		RTTP99Us:    fields["p99_us"],
+		RTTMaxUs:    fields["max_us"],
+		Samples:     fields["samples"],
+	}
+}
+
 // toolVersionInfo returns (benchctl_version, gotpc_version) from a
 // concurrency level's records, if present. Unlike pg_version, benchctl
 // stamps these onto every record as flat fields (like project_id/service),

@@ -118,9 +118,22 @@ type workloadMetrics struct {
 type sweepPointJSON struct {
 	Concurrency        int              `json:"concurrency"`
 	WorkloadParameters map[string]any   `json:"workload_parameters,omitempty"`
+	Network            *networkInfo     `json:"network,omitempty"`
 	Iterations         []iterationEntry `json:"iterations"`
 	Summary            summaryInfo      `json:"summary"`
 	WorkloadMetrics    *workloadMetrics `json:"workload_metrics,omitempty"`
+}
+
+// networkInfo is the driver-to-target round trip measured just before this
+// concurrency level ran. It describes the path between the load driver and the
+// database, not the database hardware, which is why it sits here rather than in
+// instance. Omitted for runs made before the probe existed.
+type networkInfo struct {
+	RTTMinUs    int64 `json:"rtt_min_us"`
+	RTTMedianUs int64 `json:"rtt_median_us"`
+	RTTP99Us    int64 `json:"rtt_p99_us"`
+	RTTMaxUs    int64 `json:"rtt_max_us"`
+	Samples     int64 `json:"samples"`
 }
 
 func strPtr(s string) *string {

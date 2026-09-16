@@ -101,6 +101,7 @@ func buildSweepPoint(scenario string, concurrency int, successful []candidateRun
 	point = sweepPointJSON{
 		Concurrency:        concurrency,
 		WorkloadParameters: workloadParams,
+		Network:            networkRTTInfo(records),
 		Iterations:         iterations,
 		Summary: summaryInfo{
 			Throughput: throughputInfo{Metric: "tpmC", Unit: "transactions/min", Transaction: strPtr("NEW_ORDER"), Value: tpm},

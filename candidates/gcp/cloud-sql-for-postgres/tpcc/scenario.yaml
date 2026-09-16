@@ -152,25 +152,15 @@ suite:
             query: >-
               SELECT string_agg(name || '=' || setting, ', ' ORDER BY name) FROM pg_settings WHERE name IN ('shared_buffers', 'work_mem', 'max_connections', 'effective_cache_size')
         - name: network-rtt-baseline
-          # Here the driver is deterministically pinned to the same zone/VPC as the
-          # Cloud  SQL instance, so this should read consistently low and mostly 
-          # serves as a sanity check that colocation worked.
-          type: shell
+          # Colocation sanity check. The driver is deterministically pinned to the
+          # same zone/VPC as the Cloud SQL instance, so this should read
+          # consistently low. Reported in microseconds: a driver that landed on a
+          # worse path costs a fraction of a millisecond per round trip, which
+          # millisecond resolution cannot show.
+          type: metadata
+          command: rtt
           args:
-            command: |
-              bash -c '
-                for i in $(seq 1 10); do
-                  start_ns=$(date +%s%N)
-                  timeout 5 bash -c "exec 3<>/dev/tcp/{{ target.outputs.host }}/{{ target.outputs.port }}" 2>/dev/null
-                  status=$?
-                  end_ns=$(date +%s%N)
-                  if [ $status -eq 0 ]; then
-                    echo "network-rtt-baseline: tcp_connect_ms=$(( (end_ns - start_ns) / 1000000 ))"
-                  else
-                    echo "network-rtt-baseline: tcp_connect_ms=timeout"
-                  fi
-                done
-              '
+            name: network_rtt
         - name: prepare-warehouses
           type: go-tpc
           command: prepare

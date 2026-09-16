@@ -326,14 +326,16 @@ func newOrderRawSamplesCSV(tpm float64) string {
 // into its own run directory (mirroring what benchctl fetch actually
 // produces) and loads it back through loadRunMetrics -- exercising the
 // real file-association path, not just hand-built in-memory structs.
-func makeCandidateRun(t *testing.T, dir, runID string, iteration int, threads string, tpm float64, benchctlVersion, gotpcVersion string) candidateRun {
+// extra records, when given, are appended to the run's metric records -- for
+// metadata rows like network_rtt that only some runs carry.
+func makeCandidateRun(t *testing.T, dir, runID string, iteration int, threads string, tpm float64, benchctlVersion, gotpcVersion string, extra ...metricRecord) candidateRun {
 	t.Helper()
 	runDir := filepath.Join(dir, runID)
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		t.Fatalf("mkdir %s: %v", runDir, err)
 	}
 
-	records := newOrderMetricRecords(threads, tpm, benchctlVersion, gotpcVersion)
+	records := append(newOrderMetricRecords(threads, tpm, benchctlVersion, gotpcVersion), extra...)
 	data, err := json.MarshalIndent(records, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal metric records: %v", err)
@@ -515,5 +517,118 @@ func TestToolVersionInfo(t *testing.T) {
 	}
 	if gotpcVersion != "" {
 		t.Errorf("gotpcVersion = %q, want empty", gotpcVersion)
+	}
+}
+
+func TestParseNetworkRTT_BenchctlFormat(t *testing.T) {
+	got := parseNetworkRTT("min_us=96, median_us=154, p99_us=299, max_us=337, samples=200")
+	if got == nil {
+		t.Fatal("parseNetworkRTT returned nil for a well-formed value")
+	}
+	want := networkInfo{RTTMinUs: 96, RTTMedianUs: 154, RTTP99Us: 299, RTTMaxUs: 337, Samples: 200}
+	if *got != want {
+		t.Errorf("parseNetworkRTT = %+v, want %+v", *got, want)
+	}
+}
+
+func TestParseNetworkRTT_RejectsIncompleteValues(t *testing.T) {
+	// A half-filled block is worse than none: it reads as a measurement.
+	for _, value := range []string{
+		"",
+		"samples=0",
+		"min_us=96, median_us=154, p99_us=299, samples=200", // no max_us
+		"min_us=nope, median_us=154, p99_us=299, max_us=337, samples=200",
+	} {
+		if got := parseNetworkRTT(value); got != nil {
+			t.Errorf("parseNetworkRTT(%q) = %+v, want nil", value, *got)
+		}
+	}
+}
+
+func TestNetworkRTTInfo_AbsentRecordYieldsNil(t *testing.T) {
+	records := newOrderMetricRecords("8", 1000, "v1", "v2")
+	if got := networkRTTInfo(records); got != nil {
+		t.Errorf("networkRTTInfo = %+v, want nil for records predating the probe", *got)
+	}
+}
+
+func TestNetworkRTTInfo_ReadsTheMetadataRecord(t *testing.T) {
+	records := append(newOrderMetricRecords("8", 1000, "v1", "v2"),
+		metricRecord{FixtureThreads: "8", Name: "network_rtt",
+			Value: "min_us=96, median_us=154, p99_us=299, max_us=337, samples=200"})
+	got := networkRTTInfo(records)
+	if got == nil {
+		t.Fatal("networkRTTInfo returned nil despite a network_rtt record")
+	}
+	if got.RTTMedianUs != 154 {
+		t.Errorf("RTTMedianUs = %d, want 154", got.RTTMedianUs)
+	}
+}
+
+func TestBuildResultDoc_CarriesNetworkRTTIntoTheSweepPoint(t *testing.T) {
+	dir := t.TempDir()
+	rtt := metricRecord{FixtureThreads: "12", Name: "network_rtt",
+		Value: "min_us=96, median_us=154, p99_us=299, max_us=337, samples=200"}
+	candidates := []candidateRun{
+		makeCandidateRun(t, dir, "run-a", 1, "12", 1500.0, "1.2.0", "latest", rtt),
+	}
+	scenarioDir := filepath.Join(dir, "scenario")
+	if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
+		t.Fatalf("mkdir scenarioDir: %v", err)
+	}
+
+	doc, err := buildResultDoc(resultDocInputs{
+		Manifest:     &manifest.Manifest{Provider: "AWS", Workload: "tpcc"},
+		TestPoint:    &sweepstate.TestPoint{Tier: "medium", BoundType: "compute", SweepID: "sweep-1"},
+		Def:          &manifest.TestPointDef{Tier: "medium", BoundType: "compute"},
+		Successful:   candidates,
+		ManifestPath: "candidate.yaml",
+		ScenarioDir:  scenarioDir,
+	})
+	if err != nil {
+		t.Fatalf("buildResultDoc: %v", err)
+	}
+	if len(doc.Sweep) != 1 {
+		t.Fatalf("want 1 sweep point, got %d", len(doc.Sweep))
+	}
+	got := doc.Sweep[0].Network
+	if got == nil {
+		t.Fatal("sweep[0].network = nil, want the probe's figures")
+	}
+	want := networkInfo{RTTMinUs: 96, RTTMedianUs: 154, RTTP99Us: 299, RTTMaxUs: 337, Samples: 200}
+	if *got != want {
+		t.Errorf("sweep[0].network = %+v, want %+v", *got, want)
+	}
+}
+
+func TestBuildResultDoc_OmitsNetworkWhenTheRunPredatesTheProbe(t *testing.T) {
+	dir := t.TempDir()
+	candidates := []candidateRun{makeCandidateRun(t, dir, "run-a", 1, "12", 1500.0, "1.2.0", "latest")}
+	scenarioDir := filepath.Join(dir, "scenario")
+	if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
+		t.Fatalf("mkdir scenarioDir: %v", err)
+	}
+
+	doc, err := buildResultDoc(resultDocInputs{
+		Manifest:     &manifest.Manifest{Provider: "AWS", Workload: "tpcc"},
+		TestPoint:    &sweepstate.TestPoint{Tier: "medium", BoundType: "compute", SweepID: "sweep-1"},
+		Def:          &manifest.TestPointDef{Tier: "medium", BoundType: "compute"},
+		Successful:   candidates,
+		ManifestPath: "candidate.yaml",
+		ScenarioDir:  scenarioDir,
+	})
+	if err != nil {
+		t.Fatalf("buildResultDoc: %v", err)
+	}
+	if got := doc.Sweep[0].Network; got != nil {
+		t.Errorf("sweep[0].network = %+v, want nil", *got)
+	}
+	// omitempty must keep the key out of the JSON entirely, not emit a null.
+	blob, err := json.Marshal(doc.Sweep[0])
+	if err != nil {
+		t.Fatalf("marshal sweep point: %v", err)
+	}
+	if strings.Contains(string(blob), "\"network\"") {
+		t.Errorf("sweep point JSON should omit the network key, got: %s", blob)
 	}
 }

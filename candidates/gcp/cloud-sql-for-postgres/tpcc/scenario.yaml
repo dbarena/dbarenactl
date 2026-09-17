@@ -122,8 +122,6 @@ target:
       disk_size_gb: "{{ inputs.disk_size_gb }}"
       disk_provisioned_iops: "{{ inputs.disk_iops }}"
       disk_provisioned_throughput_mibps: "{{ inputs.disk_throughput_mibps }}"
-      tags:
-        created-by: benchctl
 suite:
   iterations: 1
   fixtures:
@@ -219,8 +217,6 @@ driver:
       vector_enabled: "{{ inputs.metrics_enabled }}"
       vector_sink: stdout
       vector_host_metrics_scrape_interval_secs: "{{ inputs.metrics_interval_secs }}"
-      tags:
-        created-by: benchctl
 collector:
   provider: stdout
   config:

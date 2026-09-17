@@ -221,8 +221,6 @@ driver:
       vector_enabled: "{{ inputs.metrics_enabled }}"
       vector_sink: stdout
       vector_host_metrics_scrape_interval_secs: "{{ inputs.metrics_interval_secs }}"
-      tags:
-        created-by: benchctl
 collector:
   provider: stdout
   config:

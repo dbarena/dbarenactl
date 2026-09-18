@@ -42,6 +42,23 @@ func readTimelines(t *testing.T, stateDir string) []runTimeline {
 	return out
 }
 
+// bootstrapDuration is how long the fake takes to provision one environment,
+// and doubles as the tolerance the overlap check below allows.
+//
+// The tolerance cannot be zero. The scheduler only ever knows "this run had
+// not finished when we last polled it": Step polls each active run's status,
+// derives whether anything needs draining from what those polls saw, and only
+// then spawns a launch. A workload that completes in between is invisible
+// until the next pass, so an overlap as long as one reconcile pass -- a
+// handful of subprocess spawns, tens of milliseconds -- is unavoidable rather
+// than a policy failure, and no amount of tightening removes it.
+//
+// One provision separates the two cases cleanly. The unavoidable race is tens
+// of milliseconds. The greedy fill this test guards against launched every
+// slot back to back and drained nothing until the last provision returned,
+// leaving an environment finished-but-alive across several of them.
+const bootstrapDuration = 400 * time.Millisecond
+
 // TestPromptTeardown_NothingLaunchesWhileAFinishedEnvironmentIsStillUp is the
 // end-to-end guard on the sweep that left eight finished environments billing
 // for up to 87 minutes each. Provisioning is made slow relative to the
@@ -49,9 +66,11 @@ func readTimelines(t *testing.T, stateDir string) []runTimeline {
 // concurrency slot back to back, blocking on each provision, and fetched and
 // tore nothing down until the last one returned.
 //
-// Rather than assert on wall-clock idle time, which would be flaky, this
-// checks the ordering the cost invariant actually promises: no environment is
-// ever launched while another has already finished and is still up.
+// Rather than assert on total wall-clock idle time, which would be flaky,
+// this checks the ordering the cost invariant actually promises: no
+// environment is launched while another has been finished, and still up, for
+// longer than a single provision. See bootstrapDuration for why that bound is
+// not zero.
 func TestPromptTeardown_NothingLaunchesWhileAFinishedEnvironmentIsStillUp(t *testing.T) {
 	points := []testPointSpec{
 		{Tier: "small", BoundType: "io"},
@@ -63,7 +82,7 @@ func TestPromptTeardown_NothingLaunchesWhileAFinishedEnvironmentIsStillUp(t *tes
 	env := newEnv(t, fakeConfig{
 		// A provision that dwarfs the workload: every environment finishes
 		// its work while the next one is still coming up.
-		BootstrapDuration: "400ms",
+		BootstrapDuration: bootstrapDuration.String(),
 		Default:           behavior{Outcome: "success", WorkloadDuration: "20ms"},
 	})
 
@@ -93,13 +112,14 @@ func TestPromptTeardown_NothingLaunchesWhileAFinishedEnvironmentIsStillUp(t *tes
 			if other.RunID == launched.RunID || other.CompletedAt == nil {
 				continue
 			}
-			// other was finished -- producing nothing, still billing -- at
-			// the moment launched started provisioning.
-			if other.CompletedAt.Before(*launched.StartedAt) &&
+			// How long other had been finished -- producing nothing, still
+			// billing -- by the time launched started provisioning.
+			finishedFor := launched.StartedAt.Sub(*other.CompletedAt)
+			if finishedFor > bootstrapDuration &&
 				(other.TerminatedAt == nil || other.TerminatedAt.After(*launched.StartedAt)) {
-				t.Errorf("launched %s at %s while %s had already finished at %s and was not torn down until %v",
+				t.Errorf("launched %s at %s while %s had already been finished for %s (since %s) and was not torn down until %v",
 					launched.RunID, launched.StartedAt.Format(time.RFC3339Nano),
-					other.RunID, other.CompletedAt.Format(time.RFC3339Nano), other.TerminatedAt)
+					other.RunID, finishedFor, other.CompletedAt.Format(time.RFC3339Nano), other.TerminatedAt)
 			}
 		}
 	}

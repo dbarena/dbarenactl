@@ -92,6 +92,15 @@ func TestDelete_ConfirmDeletesLiveEnvironment(t *testing.T) {
 	if !strings.Contains(res.Stderr, "still has 1 running environment(s)") {
 		t.Errorf("stderr should warn about the running environment, got:\n%s", res.Stderr)
 	}
+	// `delete` blocks for minutes on a real teardown, so both the status
+	// check and the teardown itself must report progress rather than leaving
+	// the user staring at a dead terminal.
+	if !strings.Contains(res.Stderr, "Checking 1 environment(s)") {
+		t.Errorf("stderr should report the status check, got:\n%s", res.Stderr)
+	}
+	if !strings.Contains(res.Stderr, "torn down in") {
+		t.Errorf("stderr should report the completed teardown, got:\n%s", res.Stderr)
+	}
 	if !tornDown(t, env.stateDir, runID) {
 		t.Errorf("run %s: fake state does not show the environment torn down", runID)
 	}
@@ -206,8 +215,8 @@ func TestDelete_TeardownFailureIsWarningNotAbort(t *testing.T) {
 	if res.ExitCode != 0 {
 		t.Fatalf("dbarenactl delete --yes: exit code %d, want 0 (a teardown failure is only a warning)\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
 	}
-	if !strings.Contains(res.Stderr, "warning: tear down") {
-		t.Errorf("stderr should warn about the failed teardown, got:\n%s", res.Stderr)
+	if !strings.Contains(res.Stderr, "tear down failed") {
+		t.Errorf("stderr should report the failed teardown, got:\n%s", res.Stderr)
 	}
 	if _, err := store.GetSweep(sweepID); !errors.Is(err, sweepstate.ErrNotFound) {
 		t.Errorf("GetSweep after delete = %v, want ErrNotFound", err)

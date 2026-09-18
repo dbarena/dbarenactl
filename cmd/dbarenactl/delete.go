@@ -9,12 +9,14 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/dbarena/dbarenactl/internal/bench"
 	"github.com/dbarena/dbarenactl/internal/lock"
 	"github.com/dbarena/dbarenactl/internal/sweepstate"
+	"github.com/dbarena/dbarenactl/internal/ui"
 )
 
 var (
@@ -82,8 +84,19 @@ func runDelete(cmd *cobra.Command, args []string) error {
 	// down *by dbarenactl*; benchctl's own state is the source of truth for
 	// whether an environment is actually still up (e.g. someone may have run
 	// `benchctl teardown --purge` on it by hand). Ask benchctl about each
-	// candidate before deciding what to warn about or tear down.
-	live, alreadyGone := classifyRuns(cmd.Context(), benchClient, runs)
+	// candidate before deciding what to warn about or tear down. That is one
+	// subprocess per run, so a sweep with several live environments sits here
+	// for a while before there is anything to print -- hence the spinner.
+	var (
+		live        []liveRun
+		alreadyGone int
+	)
+	if len(runs) > 0 {
+		sp := ui.New(fmt.Sprintf("Checking %d environment(s)", len(runs)))
+		sp.Start()
+		live, alreadyGone = classifyRuns(cmd.Context(), benchClient, runs)
+		sp.Succeed(fmt.Sprintf("Checked %d environment(s): %d still running", len(runs), len(live)))
+	}
 
 	if len(live) > 0 && !deleteYes {
 		fmt.Fprintf(os.Stderr, "warning: sweep %s still has %d running environment(s):\n", sweepID, len(live))
@@ -102,13 +115,20 @@ func runDelete(cmd *cobra.Command, args []string) error {
 	}
 
 	for _, lr := range live {
+		// Tearing down one environment takes minutes, so it gets the same
+		// spinner treatment the scheduler gives its own teardowns.
+		sp := ui.New(fmt.Sprintf("%s: tearing down", lr.run.RunID))
+		sp.Start()
+		start := time.Now()
 		// A teardown failure is reported but never blocks the deletion: the
 		// point of `delete` is to get rid of the sweep, and an environment
 		// that can't be torn down here needs manual attention anyway (see
 		// docs/troubleshooting.md).
 		if err := benchClient.Teardown(cmd.Context(), lr.run.RunID); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: tear down %s: %v\n", lr.run.RunID, err)
+			sp.Fail(fmt.Sprintf("%s: tear down failed: %v", lr.run.RunID, err))
+			continue
 		}
+		sp.Succeed(fmt.Sprintf("%s: torn down in %s", lr.run.RunID, time.Since(start).Round(time.Second)))
 	}
 
 	if err := store.DeleteSweep(sweepID); err != nil {

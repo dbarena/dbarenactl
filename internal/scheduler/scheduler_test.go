@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -48,6 +50,37 @@ func seedSweepWithOneTestPoint(t *testing.T, st *sweepstate.Store, successesNeed
 	return sw, tp
 }
 
+// step runs one scheduling pass and then waits out any launch it started, so
+// a test can assert on a launch's outcome in the same place production
+// observes it one pass later. Tests that exercise the asynchrony itself call
+// s.Step directly.
+func step(s *Scheduler, ctx context.Context, sweepID string, opts Options) (StepResult, error) {
+	res, err := s.Step(ctx, sweepID, opts)
+	s.WaitForLaunches()
+	return res, err
+}
+
+// fill drives scheduling passes until no further launch starts, returning
+// the first pass's result. Production only ever provisions one environment
+// at a time, so a test that cares about the steady-state fleet rather than
+// the number of passes it took to get there uses this.
+func fill(t *testing.T, s *Scheduler, fb *fakeBench, ctx context.Context, sweepID string, opts Options) (StepResult, error) {
+	t.Helper()
+	var first StepResult
+	for i := 0; i <= opts.MaxConcurrency; i++ {
+		before := len(fb.launchCalls)
+		res, err := step(s, ctx, sweepID, opts)
+		if i == 0 {
+			first = res
+		}
+		if err != nil || len(fb.launchCalls) == before {
+			return first, err
+		}
+	}
+	t.Fatalf("fill: still launching after %d passes", opts.MaxConcurrency+1)
+	return first, nil
+}
+
 func defaultOpts() Options {
 	return Options{
 		MaxConcurrency:  6,
@@ -58,7 +91,8 @@ func defaultOpts() Options {
 }
 
 // completeRun advances a fakeRun all the way to a finished (successful or
-// failed) workload, as if benchctl had run it to completion.
+// failed) workload, as if benchctl had run it to completion. Callers reach
+// it through fakeBench.complete, which holds the fake's lock.
 func completeRun(r *fakeRun, success bool) {
 	r.state.Phases = map[string]string{
 		bench.PhaseProvision:       "completed",
@@ -78,7 +112,7 @@ func TestStep_LaunchesNewRunForFreshTestPoint(t *testing.T) {
 	s, fb, _ := newTestScheduler(t)
 	seedSweepWithOneTestPoint(t, s.Store, 1, 1)
 
-	res, err := s.Step(context.Background(), "sweep-1", defaultOpts())
+	res, err := step(s, context.Background(), "sweep-1", defaultOpts())
 	if err != nil {
 		t.Fatalf("Step: %v", err)
 	}
@@ -104,13 +138,13 @@ func TestStep_FullHappyPathToCompletion(t *testing.T) {
 	ctx := context.Background()
 
 	// Pass 1: launch.
-	if _, err := s.Step(ctx, "sweep-1", opts); err != nil {
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil {
 		t.Fatalf("launch step: %v", err)
 	}
 	runID := fb.launchCalls[0]
 
 	// Pass 2: still executing -- no progress expected.
-	res, err := s.Step(ctx, "sweep-1", opts)
+	res, err := step(s, ctx, "sweep-1", opts)
 	if err != nil {
 		t.Fatalf("waiting step: %v", err)
 	}
@@ -119,8 +153,8 @@ func TestStep_FullHappyPathToCompletion(t *testing.T) {
 	}
 
 	// Workload finishes successfully.
-	completeRun(fb.run(runID), true)
-	res, err = s.Step(ctx, "sweep-1", opts)
+	fb.complete(runID, true)
+	res, err = step(s, ctx, "sweep-1", opts)
 	if err != nil {
 		t.Fatalf("completion step: %v", err)
 	}
@@ -133,7 +167,7 @@ func TestStep_FullHappyPathToCompletion(t *testing.T) {
 	}
 
 	// Fetch step.
-	res, err = s.Step(ctx, "sweep-1", opts)
+	res, err = step(s, ctx, "sweep-1", opts)
 	if err != nil {
 		t.Fatalf("fetch step: %v", err)
 	}
@@ -146,7 +180,7 @@ func TestStep_FullHappyPathToCompletion(t *testing.T) {
 	}
 
 	// Teardown step -- should finalize and complete the sweep.
-	res, err = s.Step(ctx, "sweep-1", opts)
+	res, err = step(s, ctx, "sweep-1", opts)
 	if err != nil {
 		t.Fatalf("teardown step: %v", err)
 	}
@@ -181,7 +215,7 @@ func TestStep_LogsLaunchFinishAndTeardownProgress(t *testing.T) {
 	opts := defaultOpts()
 	ctx := context.Background()
 
-	if _, err := s.Step(ctx, "sweep-1", opts); err != nil {
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil {
 		t.Fatalf("launch step: %v", err)
 	}
 	runID := fb.launchCalls[0]
@@ -192,21 +226,21 @@ func TestStep_LogsLaunchFinishAndTeardownProgress(t *testing.T) {
 		t.Errorf("output missing provisioned line: %q", out.String())
 	}
 
-	completeRun(fb.run(runID), true)
-	if _, err := s.Step(ctx, "sweep-1", opts); err != nil {
+	fb.complete(runID, true)
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil {
 		t.Fatalf("completion step: %v", err)
 	}
 	if !strings.Contains(out.String(), runID+": workload finished (success)") {
 		t.Errorf("output missing finished line: %q", out.String())
 	}
 
-	if _, err := s.Step(ctx, "sweep-1", opts); err != nil { // fetch
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil { // fetch
 		t.Fatalf("fetch step: %v", err)
 	}
 	if !strings.Contains(out.String(), runID+": fetching results") {
 		t.Errorf("output missing fetching line: %q", out.String())
 	}
-	if _, err := s.Step(ctx, "sweep-1", opts); err != nil { // teardown + finalize
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil { // teardown + finalize
 		t.Fatalf("teardown step: %v", err)
 	}
 	tearingDownIdx := strings.Index(out.String(), runID+": tearing down")
@@ -231,7 +265,12 @@ func TestStep_LaunchFailureStopsTheWorld(t *testing.T) {
 
 	fb.onLaunch = func(runID string) { fb.run(runID).launchErr = errors.New("AWS credentials expired") }
 
-	_, err := s.Step(context.Background(), "sweep-1", defaultOpts())
+	// The launch runs on a background goroutine, so the pass that starts it
+	// returns cleanly; the failure it parked is escalated by the next one.
+	if _, err := step(s, context.Background(), "sweep-1", defaultOpts()); err != nil {
+		t.Fatalf("launching pass: %v", err)
+	}
+	_, err := step(s, context.Background(), "sweep-1", defaultOpts())
 	if err == nil || !strings.Contains(err.Error(), "AWS credentials expired") {
 		t.Fatalf("err = %v", err)
 	}
@@ -260,7 +299,7 @@ func TestStep_LaunchingStatusCheckUnusableBinary_StopsTheWorld(t *testing.T) {
 	}
 	fb.run(orphanID).statusErr = fmt.Errorf("%w: exec: \"benchctl\": executable file not found in $PATH", bench.ErrBenchctlUnusable)
 
-	_, err := s.Step(context.Background(), "sweep-1", defaultOpts())
+	_, err := step(s, context.Background(), "sweep-1", defaultOpts())
 	if err == nil || !errors.Is(err, bench.ErrBenchctlUnusable) {
 		t.Fatalf("err = %v, want wrapping bench.ErrBenchctlUnusable", err)
 	}
@@ -284,7 +323,7 @@ func TestStep_WaitingRemoteStatusCheckUnusableBinary_StopsTheWorld(t *testing.T)
 	}
 	fb.run(runID).statusErr = fmt.Errorf("%w: fork/exec /bad/path/benchctl: permission denied", bench.ErrBenchctlUnusable)
 
-	_, err := s.Step(context.Background(), "sweep-1", defaultOpts())
+	_, err := step(s, context.Background(), "sweep-1", defaultOpts())
 	if err == nil || !errors.Is(err, bench.ErrBenchctlUnusable) {
 		t.Fatalf("err = %v, want wrapping bench.ErrBenchctlUnusable", err)
 	}
@@ -308,7 +347,7 @@ func TestStep_FetchUnusableBinary_StopsTheWorldWithoutRetrying(t *testing.T) {
 	}
 	fb.run(runID).fetchErr = fmt.Errorf("%w: exec: \"benchctl\": executable file not found in $PATH", bench.ErrBenchctlUnusable)
 
-	_, err := s.Step(context.Background(), "sweep-1", defaultOpts())
+	_, err := step(s, context.Background(), "sweep-1", defaultOpts())
 	if err == nil || !errors.Is(err, bench.ErrBenchctlUnusable) {
 		t.Fatalf("err = %v, want wrapping bench.ErrBenchctlUnusable", err)
 	}
@@ -337,7 +376,7 @@ func TestStep_ResumeAfterLaunchFailure_NeverProvisioned_DiscardsAndRetries(t *te
 	}
 	fb.run(orphanID).notFound = true
 
-	res, err := s.Step(context.Background(), "sweep-1", defaultOpts())
+	res, err := step(s, context.Background(), "sweep-1", defaultOpts())
 	if err != nil {
 		t.Fatalf("Step: %v", err)
 	}
@@ -373,7 +412,7 @@ func TestStep_ResumeAfterCrash_ProvisionNotCompleted_TearsDownAndRetries(t *test
 	}
 	fb.run(orphanID).state.Phases[bench.PhaseProvision] = "running" // still provisioning when the crash hit
 
-	res, err := s.Step(context.Background(), "sweep-1", defaultOpts())
+	res, err := step(s, context.Background(), "sweep-1", defaultOpts())
 	if err != nil {
 		t.Fatalf("Step: %v", err)
 	}
@@ -412,7 +451,7 @@ func TestStep_ResumeAfterCrash_ActuallyHandedOff_NotTreatedAsOrphan(t *testing.T
 		bench.PhaseDriverSetup: "running",
 	}
 
-	res, err := s.Step(context.Background(), "sweep-1", defaultOpts())
+	res, err := step(s, context.Background(), "sweep-1", defaultOpts())
 	if err != nil {
 		t.Fatalf("Step: %v", err)
 	}
@@ -446,7 +485,7 @@ func TestStep_ResumeAfterCrash_AmbiguousWindow_WaitsWithoutActing(t *testing.T) 
 	// "now" -- squarely inside the grace period.
 	fb.run(ambiguousID).state.Phases[bench.PhaseProvision] = "completed"
 
-	res, err := s.Step(context.Background(), "sweep-1", defaultOpts())
+	res, err := step(s, context.Background(), "sweep-1", defaultOpts())
 	if err != nil {
 		t.Fatalf("Step: %v", err)
 	}
@@ -474,23 +513,23 @@ func TestStep_WorkloadFailure_AutoRetriesWithoutStoppingSweep(t *testing.T) {
 	ctx := context.Background()
 
 	// With spare concurrency and 2 successes needed, both attempts stack
-	// concurrently on the same test point from the very first pass.
-	if _, err := s.Step(ctx, "sweep-1", opts); err != nil {
+	// concurrently on the same test point.
+	if _, err := fill(t, s, fb, ctx, "sweep-1", opts); err != nil {
 		t.Fatal(err)
 	}
 	if len(fb.launchCalls) != 2 {
-		t.Fatalf("launchCalls after first pass = %v, want 2 (both needed successes stacked concurrently)", fb.launchCalls)
+		t.Fatalf("launchCalls once filled = %v, want 2 (both needed successes stacked concurrently)", fb.launchCalls)
 	}
 	firstRunID := fb.launchCalls[0]
-	completeRun(fb.run(firstRunID), false) // first attempt fails; second still in flight
+	fb.complete(firstRunID, false) // first attempt fails; second still in flight
 
-	if _, err := s.Step(ctx, "sweep-1", opts); err != nil { // -> needs_results_pull
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil { // -> needs_results_pull
 		t.Fatal(err)
 	}
-	if _, err := s.Step(ctx, "sweep-1", opts); err != nil { // -> needs_teardown (fetch)
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil { // -> needs_teardown (fetch)
 		t.Fatal(err)
 	}
-	res, err := s.Step(ctx, "sweep-1", opts) // teardown + finalize as failure
+	res, err := step(s, ctx, "sweep-1", opts) // teardown + finalize as failure
 	if err != nil {
 		t.Fatalf("teardown step: %v", err)
 	}
@@ -525,19 +564,19 @@ func TestStep_FailureBudgetExhausted_StopsTheWorldAndStaysExhausted(t *testing.T
 	opts := defaultOpts()
 	ctx := context.Background()
 
-	if _, err := s.Step(ctx, "sweep-1", opts); err != nil {
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil {
 		t.Fatal(err)
 	}
 	runID := fb.launchCalls[0]
-	completeRun(fb.run(runID), false)
-	if _, err := s.Step(ctx, "sweep-1", opts); err != nil { // -> needs_results_pull
+	fb.complete(runID, false)
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil { // -> needs_results_pull
 		t.Fatal(err)
 	}
-	if _, err := s.Step(ctx, "sweep-1", opts); err != nil { // -> needs_teardown
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil { // -> needs_teardown
 		t.Fatal(err)
 	}
 
-	_, err := s.Step(ctx, "sweep-1", opts) // teardown + finalize -> budget exhausted
+	_, err := step(s, ctx, "sweep-1", opts) // teardown + finalize -> budget exhausted
 	if err == nil || !strings.Contains(err.Error(), "exhausted its failure budget") {
 		t.Fatalf("err = %v", err)
 	}
@@ -550,7 +589,7 @@ func TestStep_FailureBudgetExhausted_StopsTheWorldAndStaysExhausted(t *testing.T
 	// Calling Step again (as `dbarenactl resume` would) must keep refusing,
 	// not silently start over -- there's nothing to retry here.
 	launchesBefore := len(fb.launchCalls)
-	_, err = s.Step(ctx, "sweep-1", opts)
+	_, err = step(s, ctx, "sweep-1", opts)
 	if err == nil || !strings.Contains(err.Error(), "exhausted its failure budget") {
 		t.Fatalf("second call err = %v", err)
 	}
@@ -591,21 +630,21 @@ func TestStep_SkippedTestPointExcludedFromSchedulingAndCompletion(t *testing.T) 
 	opts := defaultOpts()
 	ctx := context.Background()
 
-	if _, err := s.Step(ctx, sw.ID, opts); err != nil {
+	if _, err := step(s, ctx, sw.ID, opts); err != nil {
 		t.Fatal(err)
 	}
 	if len(fb.launchCalls) != 1 {
 		t.Fatalf("launchCalls = %d, want exactly 1 (the skipped test point must never be launched)", len(fb.launchCalls))
 	}
 	runID := fb.launchCalls[0]
-	completeRun(fb.run(runID), true)
-	if _, err := s.Step(ctx, sw.ID, opts); err != nil { // -> needs_results_pull
+	fb.complete(runID, true)
+	if _, err := step(s, ctx, sw.ID, opts); err != nil { // -> needs_results_pull
 		t.Fatal(err)
 	}
-	if _, err := s.Step(ctx, sw.ID, opts); err != nil { // -> needs_teardown
+	if _, err := step(s, ctx, sw.ID, opts); err != nil { // -> needs_teardown
 		t.Fatal(err)
 	}
-	result, err := s.Step(ctx, sw.ID, opts) // teardown + finalize -> sweep complete
+	result, err := step(s, ctx, sw.ID, opts) // teardown + finalize -> sweep complete
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -637,9 +676,9 @@ func TestStep_SkippedTestPointStragglerKeepsSweepOpenUntilTornDown(t *testing.T)
 	opts := defaultOpts()
 	ctx := context.Background()
 
-	// Pass 1: spare capacity launches two concurrent attempts for the one
-	// test point (remaining successes needed caps it at exactly 2).
-	if _, err := s.Step(ctx, sw.ID, opts); err != nil {
+	// Spare capacity launches two concurrent attempts for the one test
+	// point (remaining successes needed caps it at exactly 2).
+	if _, err := fill(t, s, fb, ctx, sw.ID, opts); err != nil {
 		t.Fatal(err)
 	}
 	if len(fb.launchCalls) != 2 {
@@ -652,14 +691,14 @@ func TestStep_SkippedTestPointStragglerKeepsSweepOpenUntilTornDown(t *testing.T)
 	// + finalized -- which is what actually exhausts the budget. The second
 	// attempt is never completed here: it stays a genuine straggler
 	// throughout.
-	completeRun(fb.run(failing), false)
-	if _, err := s.Step(ctx, sw.ID, opts); err != nil { // -> needs_results_pull
+	fb.complete(failing, false)
+	if _, err := step(s, ctx, sw.ID, opts); err != nil { // -> needs_results_pull
 		t.Fatal(err)
 	}
-	if _, err := s.Step(ctx, sw.ID, opts); err != nil { // -> needs_teardown
+	if _, err := step(s, ctx, sw.ID, opts); err != nil { // -> needs_teardown
 		t.Fatal(err)
 	}
-	_, err := s.Step(ctx, sw.ID, opts) // teardown + finalize -> budget exhausted
+	_, err := step(s, ctx, sw.ID, opts) // teardown + finalize -> budget exhausted
 	if err == nil || !strings.Contains(err.Error(), "exhausted its failure budget") {
 		t.Fatalf("err = %v", err)
 	}
@@ -671,7 +710,7 @@ func TestStep_SkippedTestPointStragglerKeepsSweepOpenUntilTornDown(t *testing.T)
 	// The straggler is still non-terminal (never completed) -- the sweep
 	// must not be marked done yet, even though its only test point is now
 	// skipped and therefore vacuously "allSatisfied".
-	result, err := s.Step(ctx, sw.ID, opts)
+	result, err := step(s, ctx, sw.ID, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -688,14 +727,14 @@ func TestStep_SkippedTestPointStragglerKeepsSweepOpenUntilTornDown(t *testing.T)
 
 	// Now let the straggler actually finish and walk it through the same
 	// reconciliation chain.
-	completeRun(fb.run(straggler), true)
-	if _, err := s.Step(ctx, sw.ID, opts); err != nil { // -> needs_results_pull
+	fb.complete(straggler, true)
+	if _, err := step(s, ctx, sw.ID, opts); err != nil { // -> needs_results_pull
 		t.Fatal(err)
 	}
-	if _, err := s.Step(ctx, sw.ID, opts); err != nil { // -> needs_teardown
+	if _, err := step(s, ctx, sw.ID, opts); err != nil { // -> needs_teardown
 		t.Fatal(err)
 	}
-	result, err = s.Step(ctx, sw.ID, opts) // teardown + finalize -> now truly done
+	result, err = step(s, ctx, sw.ID, opts) // teardown + finalize -> now truly done
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -736,28 +775,28 @@ func TestRestartExhaustedSweep_TearsDownStragglerBeforeWiping(t *testing.T) {
 	opts.MaxConcurrency = 2
 	ctx := context.Background()
 
-	// Pass 1: launch both.
-	if _, err := s.Step(ctx, "sweep-1", opts); err != nil {
+	// Launch both.
+	if _, err := fill(t, s, fb, ctx, "sweep-1", opts); err != nil {
 		t.Fatal(err)
 	}
 	if len(fb.launchCalls) != 2 {
-		t.Fatalf("launchCalls after pass 1 = %v", fb.launchCalls)
+		t.Fatalf("launchCalls once filled = %v", fb.launchCalls)
 	}
 	runA, runC := fb.launchCalls[0], fb.launchCalls[1]
-	completeRun(fb.run(runA), false) // A's only attempt fails
-	completeRun(fb.run(runC), true)  // C's first attempt succeeds
+	fb.complete(runA, false) // A's only attempt fails
+	fb.complete(runC, true)  // C's first attempt succeeds
 
-	// Passes 2-3: advance both runs to needs_teardown. Pass 4 finalizes both
-	// in the same call: A's failure trips its budget (1/1 failures, still
+	// Next two passes: advance both runs to needs_teardown. The pass after
+	// finalizes both in the same call: A's failure trips its budget (1/1 failures, still
 	// 0/5 successes) in the very same pass that finalizes C's success and
 	// frees capacity + spare budget for C's second (of 2 needed) attempt --
 	// reproducing the race.
 	for i := 0; i < 2; i++ {
-		if _, err := s.Step(ctx, "sweep-1", opts); err != nil {
-			t.Fatalf("pass %d: %v", i+2, err)
+		if _, err := step(s, ctx, "sweep-1", opts); err != nil {
+			t.Fatalf("drain pass %d: %v", i+1, err)
 		}
 	}
-	_, err := s.Step(ctx, "sweep-1", opts) // pass 4: finalize + exhaust + launch stray
+	_, err := step(s, ctx, "sweep-1", opts) // finalize + exhaust + launch stray
 	if err == nil || !strings.Contains(err.Error(), "exhausted its failure budget") {
 		t.Fatalf("final pass err = %v, want budget-exhausted error", err)
 	}
@@ -824,20 +863,20 @@ func TestStep_FetchExhaustsRetries_StopsTheWorld(t *testing.T) {
 	opts.FetchRetryLimit = 2
 	ctx := context.Background()
 
-	if _, err := s.Step(ctx, "sweep-1", opts); err != nil {
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil {
 		t.Fatal(err)
 	}
 	runID := fb.launchCalls[0]
-	completeRun(fb.run(runID), true)
-	if _, err := s.Step(ctx, "sweep-1", opts); err != nil { // -> needs_results_pull
+	fb.complete(runID, true)
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil { // -> needs_results_pull
 		t.Fatal(err)
 	}
 	fb.run(runID).fetchFailCount = 999 // always fails
 
-	if _, err := s.Step(ctx, "sweep-1", opts); err != nil { // attempt 1, under limit
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil { // attempt 1, under limit
 		t.Fatal(err)
 	}
-	_, err := s.Step(ctx, "sweep-1", opts) // attempt 2, hits limit
+	_, err := step(s, ctx, "sweep-1", opts) // attempt 2, hits limit
 	if err == nil || !strings.Contains(err.Error(), "results-pull failed") {
 		t.Fatalf("err = %v", err)
 	}
@@ -854,20 +893,20 @@ func TestStep_TeardownFailure_StopsTheWorld(t *testing.T) {
 	opts := defaultOpts()
 	ctx := context.Background()
 
-	if _, err := s.Step(ctx, "sweep-1", opts); err != nil {
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil {
 		t.Fatal(err)
 	}
 	runID := fb.launchCalls[0]
-	completeRun(fb.run(runID), true)
-	if _, err := s.Step(ctx, "sweep-1", opts); err != nil { // -> needs_results_pull
+	fb.complete(runID, true)
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil { // -> needs_results_pull
 		t.Fatal(err)
 	}
-	if _, err := s.Step(ctx, "sweep-1", opts); err != nil { // -> needs_teardown
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil { // -> needs_teardown
 		t.Fatal(err)
 	}
 	fb.run(runID).teardownErr = errors.New("VPC deletion blocked: dependency violation")
 
-	_, err := s.Step(ctx, "sweep-1", opts)
+	_, err := step(s, ctx, "sweep-1", opts)
 	if err == nil || !strings.Contains(err.Error(), "dependency violation") {
 		t.Fatalf("err = %v", err)
 	}
@@ -881,7 +920,7 @@ func TestStep_TeardownFailure_StopsTheWorld(t *testing.T) {
 
 	// Resuming with teardown now fixed should finalize and complete.
 	fb.run(runID).teardownErr = nil
-	res, err := s.Step(ctx, "sweep-1", opts)
+	res, err := step(s, ctx, "sweep-1", opts)
 	if err != nil {
 		t.Fatalf("retry step: %v", err)
 	}
@@ -900,7 +939,7 @@ func TestStep_StaleHeartbeat_WarnsButDoesNotTearDown(t *testing.T) {
 	opts := defaultOpts()
 	ctx := context.Background()
 
-	if _, err := s.Step(ctx, "sweep-1", opts); err != nil {
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil {
 		t.Fatal(err)
 	}
 	runID := fb.launchCalls[0]
@@ -908,7 +947,7 @@ func TestStep_StaleHeartbeat_WarnsButDoesNotTearDown(t *testing.T) {
 	fb.run(runID).state.Phases[bench.PhaseWorkloadExecute] = "running"
 	fb.run(runID).state.LastHeartbeat = &stale
 
-	res, err := s.Step(ctx, "sweep-1", opts)
+	res, err := step(s, ctx, "sweep-1", opts)
 	if err != nil {
 		t.Fatalf("Step: %v", err)
 	}
@@ -934,7 +973,7 @@ func TestStep_WaitingRemoteTerminatedWithoutCompleting_FinalizesAsFailure(t *tes
 	// itself, not the separate budget-exhausted stop-the-world path.
 	_, tp := seedSweepWithOneTestPoint(t, st, 1, 2)
 
-	if _, err := s.Step(context.Background(), "sweep-1", defaultOpts()); err != nil {
+	if _, err := step(s, context.Background(), "sweep-1", defaultOpts()); err != nil {
 		t.Fatal(err)
 	}
 	runID := fb.launchCalls[0]
@@ -945,7 +984,7 @@ func TestStep_WaitingRemoteTerminatedWithoutCompleting_FinalizesAsFailure(t *tes
 	now := time.Now().UTC()
 	fb.run(runID).state.TerminatedAt = &now
 
-	res, err := s.Step(context.Background(), "sweep-1", defaultOpts())
+	res, err := step(s, context.Background(), "sweep-1", defaultOpts())
 	if err != nil {
 		t.Fatalf("Step: %v", err)
 	}
@@ -981,12 +1020,12 @@ func TestStep_NeedsResultsPullTerminated_FinalizesAsFailure(t *testing.T) {
 	// itself, not the separate budget-exhausted stop-the-world path.
 	_, tp := seedSweepWithOneTestPoint(t, st, 1, 2)
 
-	if _, err := s.Step(context.Background(), "sweep-1", defaultOpts()); err != nil {
+	if _, err := step(s, context.Background(), "sweep-1", defaultOpts()); err != nil {
 		t.Fatal(err)
 	}
 	runID := fb.launchCalls[0]
-	completeRun(fb.run(runID), true)
-	if _, err := s.Step(context.Background(), "sweep-1", defaultOpts()); err != nil { // -> needs_results_pull
+	fb.complete(runID, true)
+	if _, err := step(s, context.Background(), "sweep-1", defaultOpts()); err != nil { // -> needs_results_pull
 		t.Fatal(err)
 	}
 
@@ -995,7 +1034,7 @@ func TestStep_NeedsResultsPullTerminated_FinalizesAsFailure(t *testing.T) {
 	now := time.Now().UTC()
 	fb.run(runID).state.TerminatedAt = &now
 
-	res, err := s.Step(context.Background(), "sweep-1", defaultOpts())
+	res, err := step(s, context.Background(), "sweep-1", defaultOpts())
 	if err != nil {
 		t.Fatalf("Step: %v", err)
 	}
@@ -1043,7 +1082,7 @@ func TestStep_RespectsMaxConcurrency(t *testing.T) {
 
 	opts := defaultOpts()
 	opts.MaxConcurrency = 2
-	res, err := s.Step(context.Background(), "sweep-1", opts)
+	res, err := fill(t, s, fb, context.Background(), "sweep-1", opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1055,14 +1094,14 @@ func TestStep_RespectsMaxConcurrency(t *testing.T) {
 	}
 
 	// Finish one of them; the third test point should now get a slot.
-	completeRun(fb.run(fb.launchCalls[0]), true)
-	if _, err := s.Step(context.Background(), "sweep-1", opts); err != nil { // -> needs_results_pull
+	fb.complete(fb.launchCalls[0], true)
+	if _, err := step(s, context.Background(), "sweep-1", opts); err != nil { // -> needs_results_pull
 		t.Fatal(err)
 	}
-	if _, err := s.Step(context.Background(), "sweep-1", opts); err != nil { // -> needs_teardown
+	if _, err := step(s, context.Background(), "sweep-1", opts); err != nil { // -> needs_teardown
 		t.Fatal(err)
 	}
-	if _, err := s.Step(context.Background(), "sweep-1", opts); err != nil { // finalize + launch #3
+	if _, err := step(s, context.Background(), "sweep-1", opts); err != nil { // finalize + launch #3
 		t.Fatal(err)
 	}
 	if len(fb.launchCalls) != 3 {
@@ -1088,7 +1127,7 @@ func TestStep_StacksConcurrentAttemptsBreadthFirst(t *testing.T) {
 
 	opts := defaultOpts()
 	opts.MaxConcurrency = 3
-	if _, err := s.Step(context.Background(), "sweep-1", opts); err != nil {
+	if _, err := fill(t, s, fb, context.Background(), "sweep-1", opts); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1118,13 +1157,17 @@ func TestRunSweep_CompletesAndReturnsNil(t *testing.T) {
 	opts := defaultOpts()
 	opts.PollInterval = time.Millisecond
 
+	var workloads sync.WaitGroup
 	fb.onLaunch = func(runID string) {
+		workloads.Add(1)
 		go func() {
+			defer workloads.Done()
 			// Simulate the workload finishing shortly after launch.
 			time.Sleep(2 * time.Millisecond)
-			completeRun(fb.run(runID), true)
+			fb.complete(runID, true)
 		}()
 	}
+	defer workloads.Wait()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -1175,5 +1218,233 @@ func TestClassifyLaunching(t *testing.T) {
 				t.Errorf("classifyLaunching() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestRunSweep_DrainsFinishedRunsWhileALaunchIsInFlight is the regression
+// test for the sweep that left eight finished environments billing for up to
+// 87 minutes each: the control loop filled every concurrency slot in one
+// pass, blocking on each provision in turn, so nothing was fetched or torn
+// down until the last one returned. It drives RunSweep rather than Step
+// directly -- calling Step from the test would supply exactly the
+// reconciliation the bug withheld.
+func TestRunSweep_DrainsFinishedRunsWhileALaunchIsInFlight(t *testing.T) {
+	s, fb, st := newTestScheduler(t)
+	sw := &sweepstate.Sweep{ID: "sweep-1", Provider: "AWS", ParamsJSON: "{}", CreatedAt: time.Now().UTC()}
+	if err := st.CreateSweep(sw); err != nil {
+		t.Fatal(err)
+	}
+	tpA := &sweepstate.TestPoint{ID: "sweep-1-a", SweepID: sw.ID, Tier: "small", Workload: "tpcc", Scenario: "x.yaml", BoundType: "io", SuccessesNeeded: 1, FailureBudget: 1}
+	tpB := &sweepstate.TestPoint{ID: "sweep-1-b", SweepID: sw.ID, Tier: "medium", Workload: "tpcc", Scenario: "x.yaml", BoundType: "io", SuccessesNeeded: 1, FailureBudget: 1}
+	if err := st.CreateTestPoints([]*sweepstate.TestPoint{tpA, tpB}); err != nil {
+		t.Fatal(err)
+	}
+	opts := defaultOpts()
+
+	// A hands off immediately. B's launch finishes A's workload and then
+	// parks, standing in for a provision that runs for tens of minutes.
+	var launches int
+	blocked, release := make(chan struct{}), make(chan struct{})
+	var first string
+	fb.onLaunch = func(runID string) {
+		launches++
+		if launches == 1 {
+			first = runID
+			return
+		}
+		fb.complete(first, true)
+		close(blocked)
+		<-release
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.RunSweep(ctx, "sweep-1", opts) }()
+	defer func() {
+		cancel()
+		close(release)
+		<-done
+	}()
+
+	<-blocked // a provision is now in flight and stays there
+
+	// A must reach done -- fetched and torn down -- without waiting for that
+	// provision to return.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		run, err := st.GetRun(first)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if run.Status == sweepstate.RunDone {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("run %s stuck at %q with a launch in flight -- a finished environment must drain during a provision, not after it", first, run.Status)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	if !s.launchBusy() {
+		t.Fatal("the launch should still be in flight -- the test proves nothing otherwise")
+	}
+	if !slices.Contains(fb.fetchCalls, first) {
+		t.Errorf("fetchCalls = %v, want %s fetched during the launch", fb.fetchCalls, first)
+	}
+	if !slices.Contains(fb.teardownCalls, first) {
+		t.Errorf("teardownCalls = %v, want %s torn down during the launch", fb.teardownCalls, first)
+	}
+}
+
+// TestStep_LaunchInFlightIsNotTreatedAsOrphan guards the interaction between
+// the async launcher and the orphan detection: a provision this process is
+// still running reports only "provision: running", which classifyLaunching
+// would otherwise read as a crashed attempt and tear down underneath itself.
+func TestStep_LaunchInFlightIsNotTreatedAsOrphan(t *testing.T) {
+	s, fb, st := newTestScheduler(t)
+	seedSweepWithOneTestPoint(t, st, 1, 1)
+	opts := defaultOpts()
+	ctx := context.Background()
+
+	blocked, release := make(chan struct{}), make(chan struct{})
+	fb.onLaunch = func(runID string) {
+		fb.setPhase(runID, bench.PhaseProvision, "running")
+		close(blocked)
+		<-release
+	}
+	defer s.WaitForLaunches()
+	defer close(release)
+
+	go s.Step(ctx, "sweep-1", opts) //nolint:errcheck
+	<-blocked
+
+	// Age the row well past the handoff grace period, which is what tips an
+	// genuinely orphaned run over into teardown.
+	s.Now = func() time.Time { return time.Now().Add(10 * bench.HandoffGracePeriod) }
+
+	if _, err := s.Step(ctx, "sweep-1", opts); err != nil {
+		t.Fatalf("Step: %v", err)
+	}
+	if len(fb.teardownCalls) != 0 {
+		t.Errorf("teardownCalls = %v, want none -- the provision is still running here", fb.teardownCalls)
+	}
+	run, err := st.GetRun(fb.launchCalls[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != sweepstate.RunLaunching {
+		t.Errorf("run.Status = %q, want still launching", run.Status)
+	}
+}
+
+// TestStep_DoesNotLaunchWhileARunAwaitsDraining pins the cost invariant: a
+// finished environment is torn down before another one is ever started.
+func TestStep_DoesNotLaunchWhileARunAwaitsDraining(t *testing.T) {
+	s, fb, st := newTestScheduler(t)
+	sw := &sweepstate.Sweep{ID: "sweep-1", Provider: "AWS", ParamsJSON: "{}", CreatedAt: time.Now().UTC()}
+	if err := st.CreateSweep(sw); err != nil {
+		t.Fatal(err)
+	}
+	tpA := &sweepstate.TestPoint{ID: "sweep-1-a", SweepID: sw.ID, Tier: "small", Workload: "tpcc", Scenario: "x.yaml", BoundType: "io", SuccessesNeeded: 1, FailureBudget: 1}
+	tpB := &sweepstate.TestPoint{ID: "sweep-1-b", SweepID: sw.ID, Tier: "medium", Workload: "tpcc", Scenario: "x.yaml", BoundType: "io", SuccessesNeeded: 1, FailureBudget: 1}
+	if err := st.CreateTestPoints([]*sweepstate.TestPoint{tpA, tpB}); err != nil {
+		t.Fatal(err)
+	}
+	opts := defaultOpts()
+	ctx := context.Background()
+
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil {
+		t.Fatal(err)
+	}
+	runA := fb.launchCalls[0]
+	fb.complete(runA, true)
+	// One transient fetch failure keeps A parked in needs_results_pull.
+	fb.run(runA).fetchFailCount = 1
+
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil { // -> needs_results_pull
+		t.Fatal(err)
+	}
+	launchesBefore := len(fb.launchCalls)
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil { // fetch fails, A still draining
+		t.Fatal(err)
+	}
+
+	run, err := st.GetRun(runA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != sweepstate.RunNeedsResultsPull {
+		t.Fatalf("run.Status = %q, want needs_results_pull -- the test needs A still draining", run.Status)
+	}
+	if len(fb.launchCalls) != launchesBefore {
+		t.Errorf("launched %v with a finished environment still awaiting teardown", fb.launchCalls[launchesBefore:])
+	}
+}
+
+func TestStep_AsyncLaunchFailureStopsTheWorldOnNextPass(t *testing.T) {
+	s, fb, st := newTestScheduler(t)
+	seedSweepWithOneTestPoint(t, st, 1, 1)
+	opts := defaultOpts()
+	ctx := context.Background()
+
+	fb.onLaunch = func(runID string) { fb.run(runID).launchErr = errors.New("quota exceeded") }
+
+	res, err := step(s, ctx, "sweep-1", opts)
+	if err != nil {
+		t.Fatalf("the pass that starts a launch must not block on its outcome: %v", err)
+	}
+	if !res.Progressed {
+		t.Error("starting a launch counts as progress")
+	}
+	sw, _ := st.GetSweep("sweep-1")
+	if sw.HasError() {
+		t.Errorf("sweep error recorded too early: %+v", sw)
+	}
+
+	_, err = step(s, ctx, "sweep-1", opts)
+	if err == nil || !strings.Contains(err.Error(), "quota exceeded") {
+		t.Fatalf("err = %v, want the parked launch failure", err)
+	}
+	sw, _ = st.GetSweep("sweep-1")
+	if sw.ErrorAction != ActionLaunch || sw.ErrorTarget != fb.launchCalls[0] {
+		t.Errorf("sweep = %+v, want a launch error against %s", sw, fb.launchCalls[0])
+	}
+}
+
+// TestRunSweep_CancelsAndWaitsForInFlightLaunchOnReturn: returning must not
+// leave a provision running unsupervised, and must not sit through a tofu
+// apply that can take the better part of an hour either.
+func TestRunSweep_CancelsAndWaitsForInFlightLaunchOnReturn(t *testing.T) {
+	s, fb, st := newTestScheduler(t)
+	seedSweepWithOneTestPoint(t, st, 1, 1)
+	opts := defaultOpts()
+
+	launchCtxDone := make(chan struct{})
+	blocked := make(chan struct{})
+	fb.onLaunchCtx = func(ctx context.Context, _ string) {
+		close(blocked)
+		<-ctx.Done()
+		close(launchCtxDone)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.RunSweep(ctx, "sweep-1", opts) }()
+
+	<-blocked
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("RunSweep did not return after cancellation")
+	}
+	select {
+	case <-launchCtxDone:
+	case <-time.After(time.Second):
+		t.Fatal("the in-flight launch was never cancelled")
+	}
+	if s.launchBusy() {
+		t.Error("RunSweep returned with a launch goroutine still running")
 	}
 }

@@ -41,12 +41,14 @@ func New(message string) *Spinner {
 
 // NewWithWriter returns a Spinner that writes to out instead of os.Stderr,
 // for callers that inject their own writer (e.g. a component that already
-// takes an io.Writer for testability). TTY detection only applies when out
-// is *os.File -- anything else degrades to the same plain start/end lines
-// non-interactive contexts already get.
+// takes an io.Writer for testability). TTY detection applies to anything
+// that can report a file descriptor -- *os.File itself, or a wrapper that
+// forwards one, such as the scheduler's serialized output writer. Anything
+// else degrades to the same plain start/end lines non-interactive contexts
+// already get.
 func NewWithWriter(out io.Writer, message string) *Spinner {
 	isTTY := false
-	if f, ok := out.(*os.File); ok {
+	if f, ok := out.(interface{ Fd() uintptr }); ok {
 		isTTY = isatty.IsTerminal(f.Fd())
 	}
 	return &Spinner{

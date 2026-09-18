@@ -43,8 +43,13 @@ See [candidates/](candidates/) for examples.
 
 For each test point, `dbarenactl` calls `benchctl` to provision an environment, runs the
 workload for the required number of successful iterations, pulls results, and tears the
-environment down. Up to `--max-concurrency` iterations can run at once in total, spread
-across test points and/or stacked concurrently on the same test point.
+environment down. Up to `--max-concurrency` iterations can be *running* at once in total,
+spread across test points and/or stacked concurrently on the same test point.
+
+Provisioning is the slow part -- tens of minutes -- so it runs in the background, one
+environment at a time, while the control loop keeps polling everything already up. An
+environment whose workload has finished is therefore fetched and torn down within about
+30 seconds, and no new one is started while a finished one is still waiting to come down.
 
 ## Monitoring and resuming
 
@@ -147,7 +152,8 @@ warning.
 | `dbarenactl pricing list [--provider <p>] [--all]` | List cached pricing snapshots (latest per provider/region by default, `--all` for full history) |
 | `dbarenactl pricing show <provider> [--region <r>]` | Show a snapshot's line items in full |
 
-Common `run` flags: `--max-concurrency` (default 1), `--iterations` (successful runs
+Common `run` flags: `--max-concurrency` (default 1, bounds live environments rather than
+launches in progress), `--iterations` (successful runs
 required per test point, default 3), `--on-workload-failure retry|fail-teardown`, `--set
 key=value` to override manifest parameters, `--benchctl-bin` to point at a non-default
 `benchctl` binary.

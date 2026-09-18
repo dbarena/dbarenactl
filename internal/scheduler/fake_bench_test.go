@@ -30,10 +30,29 @@ type fakeBench struct {
 	fetchCalls    []string
 	teardownCalls []string
 	onLaunch      func(runID string)
+	// onLaunchCtx is onLaunch with the launch's context, for tests that need
+	// to observe cancellation of a provision in flight.
+	onLaunchCtx func(ctx context.Context, runID string)
 }
 
 func newFakeBench() *fakeBench {
 	return &fakeBench{runsByID: map[string]*fakeRun{}}
+}
+
+// complete advances runID to a finished (successful or failed) workload
+// under f's lock, for tests that do so while the scheduler is concurrently
+// polling -- e.g. with a launch goroutine in flight.
+func (f *fakeBench) complete(runID string, success bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	completeRun(f.runsByID[runID], success)
+}
+
+// setPhase records one phase's status under f's lock, for the same reason.
+func (f *fakeBench) setPhase(runID, phase, status string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.runsByID[runID].state.Phases[phase] = status
 }
 
 // run returns (creating if needed) the fakeRun for runID, for tests to
@@ -49,13 +68,13 @@ func (f *fakeBench) run(runID string) *fakeRun {
 	return r
 }
 
-func (f *fakeBench) LaunchAsync(_ context.Context, runID, _ string, _ map[string]string) error {
+func (f *fakeBench) LaunchAsync(ctx context.Context, runID, _ string, _ map[string]string) error {
 	f.mu.Lock()
 	f.launchCalls = append(f.launchCalls, runID)
 	if _, ok := f.runsByID[runID]; !ok {
 		f.runsByID[runID] = &fakeRun{state: &bench.RunState{RunID: runID, Phases: map[string]string{}}}
 	}
-	onLaunch := f.onLaunch
+	onLaunch, onLaunchCtx := f.onLaunch, f.onLaunchCtx
 	f.mu.Unlock()
 
 	// Run the hook (which may itself call f.run(runID) to configure the
@@ -64,6 +83,9 @@ func (f *fakeBench) LaunchAsync(_ context.Context, runID, _ string, _ map[string
 	// needing to pre-seed state under a not-yet-known run id.
 	if onLaunch != nil {
 		onLaunch(runID)
+	}
+	if onLaunchCtx != nil {
+		onLaunchCtx(ctx, runID)
 	}
 
 	f.mu.Lock()

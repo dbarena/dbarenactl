@@ -12,6 +12,16 @@
 //     from benchctl's own state, not from a guess at timing;
 //   - a stale heartbeat during workload.execute is only ever a warning,
 //     never an automatic teardown.
+//
+// Provisioning is the one operation that blocks for tens of minutes (project
+// create, disk resize, tofu apply, ssh bootstrap), so it runs on a background
+// goroutine -- one at a time, so local load and provider API pressure are
+// unchanged -- while the control loop keeps reconciling. That buys the
+// scheduler's central cost invariant: an environment whose workload has
+// finished is fetched and torn down within one poll interval, and no new
+// environment is ever launched while a finished one is still waiting to be
+// drained. Getting this wrong is expensive -- a finished environment bills
+// for a project and a load-driver instance while producing nothing.
 package scheduler
 
 import (
@@ -19,7 +29,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/dbarena/dbarenactl/internal/bench"
@@ -76,7 +88,106 @@ type Scheduler struct {
 	// Now returns the current time; overridable in tests. Defaults to
 	// time.Now.
 	Now func() time.Time
+
+	// mu guards the launcher bookkeeping below.
+	mu sync.Mutex
+	// launching holds the run ids whose provisioning goroutine is still
+	// running in *this* process. reconcileLaunching consults it so a live
+	// provision is never mistaken for a crashed one (see classifyLaunching).
+	launching map[string]struct{}
+	// failure records the first launch failure a goroutine hit, for the next
+	// Step to pick up and escalate. Goroutines deliberately never touch
+	// sweep-level error state themselves -- keeping that single-writer is
+	// what lets Step's hadError/ClearError logic stay race-free.
+	failure *launchFailure
+	// wg tracks in-flight launch goroutines so RunSweep can wait them out.
+	wg sync.WaitGroup
+
+	// outOnce/out lazily wrap Out so the control loop, a fetch/teardown
+	// spinner and a background launch goroutine can all write to it without
+	// interleaving halfway through a line.
+	outOnce sync.Once
+	out     io.Writer
 }
+
+// syncWriter serializes concurrent writes to one underlying writer. fmt's
+// Fprint* family issues a single Write per call, so locking here makes every
+// log line and every spinner frame atomic with respect to the others.
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (w *syncWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.w.Write(p)
+}
+
+// syncFile is a syncWriter over an *os.File that keeps Fd visible, so
+// wrapping os.Stderr doesn't hide the terminal from ui.NewWithWriter's TTY
+// detection and downgrade every spinner to plain lines.
+type syncFile struct {
+	*syncWriter
+	f *os.File
+}
+
+func (w *syncFile) Fd() uintptr { return w.f.Fd() }
+
+// writer returns Out wrapped for concurrent use, or io.Discard if Out is nil.
+func (s *Scheduler) writer() io.Writer {
+	s.outOnce.Do(func() {
+		switch w := s.Out; v := w.(type) {
+		case nil:
+			s.out = io.Discard
+		case *os.File:
+			s.out = &syncFile{syncWriter: &syncWriter{w: v}, f: v}
+		default:
+			s.out = &syncWriter{w: w}
+		}
+	})
+	return s.out
+}
+
+// launchFailure is a launch that failed on a background goroutine, waiting to
+// be escalated to the sweep-wide stop rule by the next Step.
+type launchFailure struct {
+	runID string
+	err   error
+}
+
+// isLaunching reports whether runID's provisioning goroutine is still running
+// in this process.
+func (s *Scheduler) isLaunching(runID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.launching[runID]
+	return ok
+}
+
+// launchBusy reports whether any provision is currently in flight. Launches
+// are deliberately serialized: running several tofu applies and provider CLI
+// calls at once multiplies local load and risks provider API rate limits, for
+// no gain -- capacity fills at the same rate either way.
+func (s *Scheduler) launchBusy() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.launching) > 0
+}
+
+// takeLaunchFailure removes and returns the pending launch failure, if any.
+func (s *Scheduler) takeLaunchFailure() *launchFailure {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f := s.failure
+	s.failure = nil
+	return f
+}
+
+// WaitForLaunches blocks until every in-flight launch goroutine has returned.
+// Callers that want them to stop promptly should cancel the context passed to
+// Step first.
+func (s *Scheduler) WaitForLaunches() { s.wg.Wait() }
 
 func (s *Scheduler) now() time.Time {
 	if s.Now != nil {
@@ -87,7 +198,7 @@ func (s *Scheduler) now() time.Time {
 
 func (s *Scheduler) logf(format string, args ...any) {
 	if s.Out != nil {
-		fmt.Fprintf(s.Out, "[%s] "+format+"\n", append([]any{s.timestamp()}, args...)...)
+		fmt.Fprintf(s.writer(), "[%s] "+format+"\n", append([]any{s.timestamp()}, args...)...)
 	}
 }
 
@@ -113,19 +224,16 @@ func (s *Scheduler) markf(mark, format string, args ...any) {
 	if s.Out == nil {
 		return
 	}
-	fmt.Fprintln(s.Out, mark+" "+s.stamp(fmt.Sprintf(format, args...)))
+	fmt.Fprintln(s.writer(), mark+" "+s.stamp(fmt.Sprintf(format, args...)))
 }
 
-// spinner returns a Spinner for one launch/teardown operation, writing
+// spinner returns a Spinner for one fetch/teardown operation, writing
 // through the same Out as logf (so production gets a real animated spinner
 // on a terminal, and tests get the same plain start/end lines logf itself
-// would produce).
+// would produce). Launches don't use one: they run on a background
+// goroutine, and see launchAsync for why that rules a spinner out.
 func (s *Scheduler) spinner(message string) *ui.Spinner {
-	out := s.Out
-	if out == nil {
-		out = io.Discard
-	}
-	return ui.NewWithWriter(out, s.stamp(message))
+	return ui.NewWithWriter(s.writer(), s.stamp(message))
 }
 
 // RunSweep drives sweepID to completion, polling at opts.PollInterval when a
@@ -133,6 +241,22 @@ func (s *Scheduler) spinner(message string) *ui.Spinner {
 // world condition is hit (returned as an error; sweepstate already records
 // what to retry -- the caller should tell the user to run `dbarenactl resume`).
 func (s *Scheduler) RunSweep(ctx context.Context, sweepID string, opts Options) error {
+	// Launch goroutines get their own cancellable context so that returning
+	// -- for any reason -- stops a provision in progress instead of waiting
+	// out a tofu apply that can run for the better part of an hour after the
+	// sweep has already given up. Cancelling kills the benchctl child, whose
+	// own teardown defer unwinds what it created; anything it still leaves
+	// behind is caught by reconcileLaunching's orphan path on the next
+	// `dbarenactl resume`.
+	ctx, cancelLaunches := context.WithCancel(ctx)
+	defer func() {
+		cancelLaunches()
+		if s.launchBusy() {
+			s.logf("stopping: cancelling the launch still in flight -- `dbarenactl resume %s` will tear down anything it left behind", sweepID)
+		}
+		s.WaitForLaunches()
+	}()
+
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -160,6 +284,17 @@ func (s *Scheduler) RunSweep(ctx context.Context, sweepID string, opts Options) 
 // surface this package's tests exercise -- no sleeping, no looping, fully
 // deterministic given a fake bench.Runner.
 func (s *Scheduler) Step(ctx context.Context, sweepID string, opts Options) (StepResult, error) {
+	// Before anything else: a launch that failed on a background goroutine
+	// is the same stop-the-world condition a synchronous one was, just
+	// observed a pass later. Recording it here rather than in the goroutine
+	// keeps sweep-level error state single-writer.
+	if f := s.takeLaunchFailure(); f != nil {
+		if rerr := s.Store.RecordError(sweepID, ActionLaunch, f.runID, f.err.Error()); rerr != nil {
+			return StepResult{}, rerr
+		}
+		return StepResult{}, fmt.Errorf("launch %s: %w", f.runID, f.err)
+	}
+
 	sweep, err := s.Store.GetSweep(sweepID)
 	if err != nil {
 		return StepResult{}, err
@@ -196,8 +331,12 @@ func (s *Scheduler) Step(ctx context.Context, sweepID string, opts Options) (Ste
 	}
 	inFlight := len(activeRuns)
 	pendingByTestPoint := make(map[string]int, len(activeRuns))
+	draining := false
 	for _, r := range activeRuns {
 		pendingByTestPoint[r.TestPointID]++
+		if r.Status == sweepstate.RunNeedsResultsPull || r.Status == sweepstate.RunNeedsTeardown {
+			draining = true
+		}
 	}
 
 	allSatisfied := true
@@ -215,35 +354,27 @@ func (s *Scheduler) Step(ctx context.Context, sweepID string, opts Options) (Ste
 		launchable = append(launchable, tp)
 	}
 
-	// Fill capacity in rounds, one attempt per still-eligible test point per
-	// round, so spare capacity spreads breadth-first across test points
-	// first and only stacks several concurrent attempts on the same test
-	// point once every other one already has all the attempts it could use.
-	for madeProgress := true; madeProgress && inFlight < opts.MaxConcurrency; {
-		madeProgress = false
-		for _, tp := range launchable {
-			if inFlight >= opts.MaxConcurrency {
-				break
-			}
-			// A test point can run several attempts concurrently -- there's
-			// nothing shared between them, each provisions its own infra
-			// under a distinct run id. Cap concurrent attempts at what
-			// could still be needed (optimistically assuming in-flight ones
-			// succeed), so a pass never launches more than the sweep will
-			// end up wanting.
-			remaining := tp.SuccessesNeeded - tp.SuccessesCount - pendingByTestPoint[tp.ID]
-			if remaining <= 0 {
-				continue
-			}
-			attempt := tp.SuccessesCount + tp.FailuresCount + pendingByTestPoint[tp.ID] + 1
-			if err := s.launch(ctx, sweepID, tp, attempt); err != nil {
-				return StepResult{}, err
-			}
-			inFlight++
-			pendingByTestPoint[tp.ID]++
-			progressed = true
-			madeProgress = true
+	// At most one launch per pass, and only once nothing is left to drain.
+	// Both conditions exist for the same reason: provisioning blocks for
+	// tens of minutes, so anything queued behind it -- another launch, or a
+	// finished environment's fetch and teardown -- would wait that long too.
+	// Reconciliation above has already drained everything it could, so a
+	// draining run here is one whose fetch hit a transient failure; it gets
+	// retried next pass, bounded by opts.FetchRetryLimit.
+	next := nextToLaunch(launchable, pendingByTestPoint)
+	switch {
+	case next == nil || s.launchBusy() || inFlight >= opts.MaxConcurrency:
+		// Nothing wants a slot, a provision is already running, or the
+		// sweep is at capacity.
+	case draining:
+		s.logf("holding off on launching %s until every finished environment is torn down", next.ID)
+	default:
+		attempt := next.SuccessesCount + next.FailuresCount + pendingByTestPoint[next.ID] + 1
+		if err := s.launchAsync(ctx, next, attempt); err != nil {
+			return StepResult{}, err
 		}
+		inFlight++
+		progressed = true
 	}
 
 	if exhausted != nil {
@@ -300,9 +431,10 @@ func (s *Scheduler) reconcileRun(ctx context.Context, sweepID string, run *sweep
 }
 
 // launchingVerdict is the outcome of classifying a RunLaunching row found at
-// the start of a scheduling pass (always either mid-launch-within-this-
-// process, which resolves synchronously and is never seen here, or leftover
-// from a prior crashed process).
+// the start of a scheduling pass. Rows whose launch goroutine is still
+// running in this process are filtered out by reconcileLaunching before they
+// get here, so anything classified is leftover from a crashed or cancelled
+// prior attempt.
 type launchingVerdict int
 
 const (
@@ -330,6 +462,13 @@ func classifyLaunching(rs *bench.RunState, createdAt, now time.Time) launchingVe
 }
 
 func (s *Scheduler) reconcileLaunching(ctx context.Context, sweepID string, run *sweepstate.Run) (bool, error) {
+	// Its provisioning goroutine is still running right here: benchctl has
+	// only written "provision: running" so far, which classifyLaunching
+	// would read as an orphan and tear down under a live tofu apply.
+	if s.isLaunching(run.RunID) {
+		return false, nil
+	}
+
 	rs, err := s.Bench.Status(ctx, run.RunID)
 	if errors.Is(err, bench.ErrRunNotFound) {
 		// benchctl's store never got a record at all -- the previous
@@ -505,7 +644,41 @@ func (s *Scheduler) reconcileNeedsTeardown(ctx context.Context, sweepID string, 
 	return true, nil
 }
 
-func (s *Scheduler) launch(ctx context.Context, sweepID string, tp *sweepstate.TestPoint, attempt int) error {
+// nextToLaunch picks the single test point to start an attempt for, or nil
+// if none can use one. Choosing the eligible test point with the fewest
+// attempts already in flight (ties broken by manifest order) spreads spare
+// capacity breadth-first across test points, and only stacks several
+// concurrent attempts on one test point once every other one already has all
+// the attempts it could use.
+func nextToLaunch(launchable []*sweepstate.TestPoint, pendingByTestPoint map[string]int) *sweepstate.TestPoint {
+	var best *sweepstate.TestPoint
+	for _, tp := range launchable {
+		// A test point can run several attempts concurrently -- there's
+		// nothing shared between them, each provisions its own infra under a
+		// distinct run id. Cap concurrent attempts at what could still be
+		// needed (optimistically assuming in-flight ones succeed), so the
+		// sweep never launches more than it will end up wanting.
+		if tp.SuccessesNeeded-tp.SuccessesCount-pendingByTestPoint[tp.ID] <= 0 {
+			continue
+		}
+		if best == nil || pendingByTestPoint[tp.ID] < pendingByTestPoint[best.ID] {
+			best = tp
+		}
+	}
+	return best
+}
+
+// launchAsync starts provisioning one attempt for tp on a background
+// goroutine and returns immediately, so the control loop keeps reconciling --
+// and so finished environments keep getting torn down -- while a provision
+// that can run for tens of minutes is in flight. A failure is parked in
+// s.failure for the next Step to escalate rather than returned here.
+//
+// Progress is reported with plain log lines rather than a ui.Spinner: a
+// spinner animating from a background goroutine would interleave its
+// carriage-return frames with everything else the loop writes to the same
+// stderr.
+func (s *Scheduler) launchAsync(ctx context.Context, tp *sweepstate.TestPoint, attempt int) error {
 	runID := planner.NewRunID(tp.ID, attempt)
 	run := &sweepstate.Run{RunID: runID, TestPointID: tp.ID, IterationAttempt: attempt}
 	// Durably committed *before* invoking benchctl at all -- this is what
@@ -515,20 +688,42 @@ func (s *Scheduler) launch(ctx context.Context, sweepID string, tp *sweepstate.T
 	if err := s.Store.CreateRun(run); err != nil {
 		return err
 	}
-	sp := s.spinner(fmt.Sprintf("launching %s (run %s, attempt %d)", tp.ID, runID, attempt))
-	sp.Start()
-	start := time.Now()
-	defer func() { sp.Fail(s.stamp(fmt.Sprintf("%s: launch did not finish", runID))) }()
 
-	if err := s.Bench.LaunchAsync(ctx, runID, tp.Scenario, tp.Set); err != nil {
-		sp.Fail(s.stamp(fmt.Sprintf("launch %s failed: %v", runID, err)))
-		if rerr := s.Store.RecordError(sweepID, ActionLaunch, runID, err.Error()); rerr != nil {
-			return rerr
-		}
-		return fmt.Errorf("launch %s: %w", runID, err)
+	s.mu.Lock()
+	if s.launching == nil {
+		s.launching = make(map[string]struct{})
 	}
-	sp.Succeed(s.stamp(fmt.Sprintf("%s: provisioned in %s, workload running remotely", runID, time.Since(start).Round(time.Second))))
-	return s.Store.SetRunStatus(runID, sweepstate.RunWaitingRemote)
+	s.launching[runID] = struct{}{}
+	s.mu.Unlock()
+
+	s.logf("launching %s (run %s, attempt %d)", tp.ID, runID, attempt)
+	start := s.now()
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		err := s.Bench.LaunchAsync(ctx, runID, tp.Scenario, tp.Set)
+		if err == nil {
+			err = s.Store.SetRunStatus(runID, sweepstate.RunWaitingRemote)
+		}
+
+		s.mu.Lock()
+		delete(s.launching, runID)
+		// First failure wins: the sweep stops on it either way, and the
+		// first one is the one that explains the rest.
+		if err != nil && s.failure == nil {
+			s.failure = &launchFailure{runID: runID, err: err}
+		}
+		s.mu.Unlock()
+
+		// The run row stays at RunLaunching on failure, which is exactly
+		// what reconcileLaunching's orphan detection expects to find.
+		if err != nil {
+			s.markf("✗", "%s: launch failed after %s: %v", runID, s.now().Sub(start).Round(time.Second), err)
+			return
+		}
+		s.markf("✓", "%s: provisioned in %s, workload running remotely", runID, s.now().Sub(start).Round(time.Second))
+	}()
+	return nil
 }
 
 // RestartExhaustedSweep discards a budget-exhausted sweep's entire progress

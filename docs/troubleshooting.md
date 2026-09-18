@@ -9,9 +9,11 @@ for details.
 ## How a sweep runs
 
 For each test point in a sweep, `dbarenactl` delegates to `benchctl` to set up an environment
-(blocking until it's ready) and lets the benchmark run in the background. Once a benchmark
-is completed, `dbarenactl` pulls the results and tears the environment down (blocking). 
-Several test points can be in flight at once, up to a concurrency limit.
+and lets the benchmark run in the background. Once a benchmark is completed, `dbarenactl`
+pulls the results and tears the environment down. Several test points can be in flight at
+once, up to a concurrency limit. Only one environment is provisioned at a time, and that
+happens in the background, so finished environments keep being torn down while the next one
+comes up.
 
 Importantly, `dbarenactl` completely relies on `benchctl` for the low-level plumbing.
 If you're unsure about `dbarenactl` reporting, use `benchctl` directly to investigate.

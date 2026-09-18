@@ -61,12 +61,17 @@ type Config struct {
 }
 
 type state struct {
-	RunID         string            `json:"run_id"`
-	Phases        map[string]string `json:"phases"`
-	CompletedAt   *time.Time        `json:"completed_at,omitempty"`
-	TerminatedAt  *time.Time        `json:"terminated_at,omitempty"`
-	LastHeartbeat *time.Time        `json:"last_heartbeat,omitempty"`
-	Error         string            `json:"error,omitempty"`
+	RunID  string            `json:"run_id"`
+	Phases map[string]string `json:"phases"`
+	// StartedAt is when `run --async` began provisioning. Recorded so a
+	// scenario can check launch ordering against other runs' completed_at /
+	// terminated_at -- notably that nothing is launched while a finished
+	// environment is still up.
+	StartedAt     *time.Time `json:"started_at,omitempty"`
+	CompletedAt   *time.Time `json:"completed_at,omitempty"`
+	TerminatedAt  *time.Time `json:"terminated_at,omitempty"`
+	LastHeartbeat *time.Time `json:"last_heartbeat,omitempty"`
+	Error         string     `json:"error,omitempty"`
 }
 
 func stateDir() string {
@@ -226,6 +231,7 @@ func cmdRun(args []string) {
 	}
 
 	b := behaviorFor(cfg, runID)
+	startedAt := time.Now().UTC()
 	bootstrap := durationOr(cfg.BootstrapDuration, 200*time.Millisecond)
 	time.Sleep(bootstrap)
 
@@ -235,7 +241,7 @@ func cmdRun(args []string) {
 		fatal("run %s: simulated launch failure", runID)
 	}
 
-	st := &state{RunID: runID, Phases: map[string]string{"provision": "completed"}}
+	st := &state{RunID: runID, Phases: map[string]string{"provision": "completed"}, StartedAt: &startedAt}
 	if err := saveState(dir, st); err != nil {
 		fatal("run: %v", err)
 	}

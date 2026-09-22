@@ -73,7 +73,7 @@ func buildSweepPoints(scenario string, successful []candidateRun, selected candi
 // buildIterationEntries).
 func buildSweepPoint(scenario string, concurrency int, successful []candidateRun, selected candidateRun, warehouses *float64, scenarioDir string) (point sweepPointJSON, engineVersion, cpuArch, benchctlVersion, gotpcVersion string, err error) {
 	records := selected.metricsByThreads[concurrency]
-	tpm, err := tpmCAt(records)
+	tpm, err := tpmAt(records)
 	if err != nil {
 		return point, "", "", "", "", fmt.Errorf("%s: concurrency %d: %w", scenario, concurrency, err)
 	}
@@ -104,7 +104,7 @@ func buildSweepPoint(scenario string, concurrency int, successful []candidateRun
 		Network:            networkRTTInfo(records),
 		Iterations:         iterations,
 		Summary: summaryInfo{
-			Throughput: throughputInfo{Metric: "tpmC", Unit: "transactions/min", Transaction: strPtr("NEW_ORDER"), Value: tpm},
+			Throughput: throughputInfo{Metric: "tpm", Unit: "transactions/min", Transaction: strPtr("NEW_ORDER"), Value: tpm},
 			LatencyMs:  latencyInfo{Transaction: strPtr("NEW_ORDER"), P50: p50, P95: p95, P99: p99},
 		},
 		WorkloadMetrics: &workloadMetrics{Transactions: txns, Errors: errs},
@@ -125,7 +125,7 @@ func buildIterationEntries(scenario string, concurrency int, successful []candid
 		if !ok {
 			continue
 		}
-		candidateTpm, err := tpmCAt(candidateRecords)
+		candidateTpm, err := tpmAt(candidateRecords)
 		if err != nil {
 			return nil, fmt.Errorf("%s: concurrency %d: run %s: %w", scenario, concurrency, c.run.RunID, err)
 		}
@@ -133,10 +133,8 @@ func buildIterationEntries(scenario string, concurrency int, successful []candid
 		var notes *string
 		var rawMetricsFile *string
 		if c.run.RunID == selected.run.RunID {
-			notes = strPtr("This iteration's data (median tpmC at this test point's peak concurrency) is used " +
-				"for summary/workload_metrics below; the other iterations are listed for reference only. " +
-				"started_at/completed_at reflect the whole run's span, not this specific concurrency point -- " +
-				"dbarenactl does not currently capture per-fixture timestamps.")
+			notes = strPtr("This iteration's data (median tpm at this test point's peak concurrency) is used " +
+				"for summary/workload_metrics below.")
 			if rawPath, ok := c.rawSamplesByThreads[concurrency]; ok {
 				relName := fmt.Sprintf("raw-clients-%d.csv", concurrency)
 				if err := writeRawClientsCSV(rawPath, filepath.Join(scenarioDir, relName)); err != nil {
@@ -146,8 +144,7 @@ func buildIterationEntries(scenario string, concurrency int, successful []candid
 				}
 			}
 		} else {
-			notes = strPtr("started_at/completed_at reflect the whole run's span, not this specific " +
-				"concurrency point -- dbarenactl does not currently capture per-fixture timestamps.")
+			notes = strPtr("started_at/completed_at reflect the whole run's span, not this specific concurrency.")
 		}
 		iterations = append(iterations, iterationEntry{
 			Iteration:      c.run.IterationAttempt,

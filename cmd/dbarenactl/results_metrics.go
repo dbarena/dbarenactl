@@ -108,9 +108,9 @@ type candidateRun struct {
 	rawSamplesByThreads map[int]string
 }
 
-// tpmCAt returns the primary-metric (tpmC = NEW_ORDER, status=ok) throughput
+// tpmAt returns the primary-metric (tpm for NEW_ORDER, status=ok) throughput
 // value at a given concurrency level.
-func tpmCAt(records []metricRecord) (float64, error) {
+func tpmAt(records []metricRecord) (float64, error) {
 	for _, r := range records {
 		if r.Name == "tpcc_tpm" && r.Transaction == "NEW_ORDER" && r.Status == "ok" {
 			return r.floatValue()
@@ -160,7 +160,7 @@ func selectRepresentativeRun(candidates []candidateRun) (candidateRun, int, erro
 	}
 	var scoredRuns []scored
 	for _, c := range candidates {
-		tpm, err := tpmCAt(c.metricsByThreads[peak])
+		tpm, err := tpmAt(c.metricsByThreads[peak])
 		if err != nil {
 			return candidateRun{}, 0, fmt.Errorf("run %s at concurrency %d: %w", c.run.RunID, peak, err)
 		}
@@ -171,8 +171,7 @@ func selectRepresentativeRun(candidates []candidateRun) (candidateRun, int, erro
 	return median.c, peak, nil
 }
 
-// txnNames lists TPC-C's five transaction types in the order the schema's
-// example data presents them.
+// txnNames lists transaction types in the order the schema's example data presents them.
 var txnNames = []string{"NEW_ORDER", "PAYMENT", "ORDER_STATUS", "DELIVERY", "STOCK_LEVEL"}
 
 // buildTxnMetrics assembles one sweep point's workload_metrics.transactions

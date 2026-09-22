@@ -289,13 +289,8 @@ func TestBuildInstanceInfo_SetsDiskType(t *testing.T) {
 // ---- buildResultDoc + raw-clients CSV, end to end from on-disk artifacts ----
 
 // newOrderMetricRecords builds the metricRecord set one candidate run needs
-// at a given concurrency: just enough for tpmCAt/latencyFor/buildTxnMetrics
-// to succeed without error (only NEW_ORDER is populated -- the other four
-// TPC-C transactions are legitimately absent from some real runs too, and
-// buildTxnMetrics tolerates that already). benchctlVersion/gotpcVersion are
-// stamped onto every record, mirroring how benchctl's collector labels
-// actually attach them; pass "" for either to simulate a run whose records
-// predate benchctl's version-metadata feature.
+// at a given concurrency: just enough for tpmAt/latencyFor/buildTxnMetrics
+// to succeed without error (only NEW_ORDER is populated).
 func newOrderMetricRecords(threads string, tpm float64, benchctlVersion, gotpcVersion string) []metricRecord {
 	records := []metricRecord{
 		{FixtureThreads: threads, Name: "tpcc_tpm", Transaction: "NEW_ORDER", Status: "ok", Value: tpm},

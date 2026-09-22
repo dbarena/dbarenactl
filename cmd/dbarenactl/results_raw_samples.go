@@ -36,9 +36,7 @@ var rawSamplesColumns = []string{
 }
 
 // rawClientsHeader is dbarena results/'s raw-clients-<threads>.csv header.
-// Scoped to NEW_ORDER only -- TPC-C's official throughput metric (tpmC) --
-// since the other four transactions' TPM is redundant with it at a fixed
-// weight ratio; their latency isn't carried through here either.
+// Scoped to the primary transaction type only.
 var rawClientsHeader = []string{
 	"t_seconds", "new_order_tpm", "new_order_avg_latency_ms",
 	"new_order_p50_latency_ms", "new_order_p90_latency_ms",

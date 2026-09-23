@@ -69,11 +69,11 @@ inputs:
     description: Number of clients for the actual benchmark
   duration:
     type: duration
-    default: 30m
+    default: 60m
     description: Duration of the actual benchmark
   warmup_duration:
     type: duration
-    default: 5m
+    default: 30m
     description: Duration of the warmup phase for the benchmark
   driver_instance_type:
     type: string

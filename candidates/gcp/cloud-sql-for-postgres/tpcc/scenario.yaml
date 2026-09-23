@@ -75,10 +75,6 @@ inputs:
     type: duration
     default: 5m
     description: Duration of the warmup phase for the benchmark
-  wal_settle_duration_secs:
-    type: int
-    default: 720
-    description: Pause time after the initial data load to allow for cooldown
   driver_instance_type:
     type: string
     # Load driver (GCE) machine type, independent of the target's capabilities. 
@@ -162,21 +158,14 @@ suite:
         - name: prepare-warehouses
           type: go-tpc
           command: prepare
+          once: true
           args:
             warehouses: "{{ inputs.warehouses }}"
-            # parallelize data load
             threads: "{{ inputs.prepare_threads }}"
             no-check: ""
             dropdata: ""
-        - name: wal-settle-pause
-          # wait for a while to let the system cool down after the batch load
-          type: shell
-          args:
-            command: "sleep {{ inputs.wal_settle_duration_secs }}"
-        - name: warm-up
-          # Discarded: workloadMetrics is overwritten by the next (measured)
-          # go-tpc run step below, so this only serves to bring the connection
-          # pool and buffer cache to steady state before the timed window.
+        - name: warmup
+          # The metrics from this run are discarded and only meant to bring the system to a steady state.
           type: go-tpc
           command: run
           args:
@@ -190,7 +179,7 @@ suite:
             warehouses: "{{ inputs.warehouses }}"
             threads: "{{ fixture.client_threads }}"
             time: "{{ inputs.duration }}"
-            interval: "1s"
+            interval: "10s"
         - name: get-db-size
           type: metadata
           command: sql

@@ -11,19 +11,20 @@ import (
 	"strings"
 )
 
-// rawSamplesPathFor derives the raw_samples_*.csv path benchctl's stdout
-// collector wrote alongside resultsJSONPath. Both are written by the same
-// Collect() call with the same naming inputs (benchctl's
+// rawSamplesPathFor derives the raw_samples_*_benchmark.csv path benchctl's
+// stdout collector wrote alongside resultsJSONPath. Both are written by the
+// same Collect() call with the same naming inputs (benchctl's
 // internal/collectors/stdout/collector.go, artifactNaming/artifactFilename),
-// so their <benchmark>_<iteration>[_<fixture>] suffix is always identical --
-// deriving the path this way avoids re-parsing the raw-samples filename
+// so their <benchmark>_<iteration>[_<fixture>] prefix is always identical.
+// Deriving the path this way avoids re-parsing the raw-samples filename
 // independently, which would be ambiguous once a benchmark name itself
-// contains underscores.
+// contains underscores. benchctl writes a warmup/benchmark pair per results
+// file; we ignore the "_warmup.csv" files.
 func rawSamplesPathFor(resultsJSONPath string) string {
 	dir, base := filepath.Split(resultsJSONPath)
 	base = strings.TrimSuffix(base, ".json")
 	base = strings.Replace(base, "results_", "raw_samples_", 1)
-	return filepath.Join(dir, base+".csv")
+	return filepath.Join(dir, base+"_benchmark.csv")
 }
 
 // rawSamplesColumns are the columns writeRawClientsCSV reads from a benchctl

@@ -12,9 +12,9 @@ func TestRawSamplesPathFor(t *testing.T) {
 		resultsPath string
 		want        string
 	}{
-		{"/runs/r1/results_supabase_1_12.json", "/runs/r1/raw_samples_supabase_1_12.csv"},
-		{"/runs/r1/results_gcp_cloudsql_1_24.json", "/runs/r1/raw_samples_gcp_cloudsql_1_24.csv"},
-		{"results_rds_1_4.json", "raw_samples_rds_1_4.csv"},
+		{"/runs/r1/results_supabase_1_12.json", "/runs/r1/raw_samples_supabase_1_12_benchmark.csv"},
+		{"/runs/r1/results_gcp_cloudsql_1_24.json", "/runs/r1/raw_samples_gcp_cloudsql_1_24_benchmark.csv"},
+		{"results_rds_1_4.json", "raw_samples_rds_1_4_benchmark.csv"},
 	}
 	for _, c := range cases {
 		got := rawSamplesPathFor(c.resultsPath)

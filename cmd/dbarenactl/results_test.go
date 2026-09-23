@@ -338,7 +338,7 @@ func makeCandidateRun(t *testing.T, dir, runID string, iteration int, threads st
 	if err := os.WriteFile(filepath.Join(runDir, fmt.Sprintf("results_supabase_%d_%s.json", iteration, threads)), data, 0o644); err != nil {
 		t.Fatalf("write results json: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(runDir, fmt.Sprintf("raw_samples_supabase_%d_%s.csv", iteration, threads)), []byte(newOrderRawSamplesCSV(tpm)), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(runDir, fmt.Sprintf("raw_samples_supabase_%d_%s_benchmark.csv", iteration, threads)), []byte(newOrderRawSamplesCSV(tpm)), 0o644); err != nil {
 		t.Fatalf("write raw samples csv: %v", err)
 	}
 

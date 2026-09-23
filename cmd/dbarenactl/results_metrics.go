@@ -60,7 +60,7 @@ func (m metricRecord) stringValue() (string, error) {
 // "warmup" (older records without step field are kept, since they predate
 // the warmup/benchmark split and are benchmark-phase data), then groups the
 // remaining records by their fixture_client_threads (i.e. concurrency)
-// value. It also associates each concurrency with its sibling 
+// value. It also associates each concurrency with its sibling
 // raw_samples_*.csv path, when one exists.
 // results_<X>.json and raw_samples_<X>.csv are always written by the same
 // benchctl Collect() call with the same naming inputs, so the raw-samples

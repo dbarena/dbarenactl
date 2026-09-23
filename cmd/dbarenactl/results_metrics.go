@@ -18,7 +18,7 @@ import (
 // other record carries a number.
 type metricRecord struct {
 	Benchmark       string `json:"benchmark"`
-	FixtureThreads  string `json:"fixture_threads"`
+	FixtureThreads  string `json:"fixture_client_threads"`
 	Iteration       int    `json:"iteration"`
 	Name            string `json:"name"`
 	ProjectID       string `json:"project_id"`
@@ -26,6 +26,7 @@ type metricRecord struct {
 	Status          string `json:"status,omitempty"`
 	Transaction     string `json:"transaction,omitempty"`
 	Quantile        string `json:"quantile,omitempty"`
+	Step            string `json:"step,omitempty"`
 	Value           any    `json:"value"`
 	BenchctlVersion string `json:"benchctl_version,omitempty"`
 	GotpcVersion    string `json:"gotpc_version,omitempty"`
@@ -55,9 +56,12 @@ func (m metricRecord) stringValue() (string, error) {
 }
 
 // loadRunMetrics reads and flattens every results_*.json file directly
-// inside artifactDir into one slice, then groups the records by their
-// fixture_threads (i.e. concurrency) value. It also associates each
-// concurrency with its sibling raw_samples_*.csv path, when one exists --
+// inside artifactDir into one slice, dropping any record whose step is
+// "warmup" (older records without step field are kept, since they predate
+// the warmup/benchmark split and are benchmark-phase data), then groups the
+// remaining records by their fixture_client_threads (i.e. concurrency)
+// value. It also associates each concurrency with its sibling 
+// raw_samples_*.csv path, when one exists.
 // results_<X>.json and raw_samples_<X>.csv are always written by the same
 // benchctl Collect() call with the same naming inputs, so the raw-samples
 // path is derived from the results path found here (see rawSamplesPathFor)
@@ -79,17 +83,22 @@ func loadRunMetrics(artifactDir string) (map[int][]metricRecord, map[int]string,
 			return nil, nil, fmt.Errorf("parse %s: %w", path, err)
 		}
 		var threads int
-		for i, r := range records {
+		haveThreads := false
+		for _, r := range records {
+			if r.Step == "warmup" {
+				continue
+			}
 			t, err := strconv.Atoi(r.FixtureThreads)
 			if err != nil {
-				return nil, nil, fmt.Errorf("%s: fixture_threads %q is not an integer: %w", path, r.FixtureThreads, err)
+				return nil, nil, fmt.Errorf("%s: fixture_client_threads %q is not an integer: %w", path, r.FixtureThreads, err)
 			}
-			if i == 0 {
+			if !haveThreads {
 				threads = t
+				haveThreads = true
 			}
 			byThreads[t] = append(byThreads[t], r)
 		}
-		if len(records) == 0 {
+		if !haveThreads {
 			continue
 		}
 		rawPath := rawSamplesPathFor(path)

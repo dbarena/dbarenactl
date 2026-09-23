@@ -31,6 +31,10 @@ func buildSweepPoints(scenario string, successful []candidateRun, selected candi
 		threads = append(threads, t)
 	}
 	sort.Ints(threads)
+	var maxConcurrency int
+	if len(threads) > 0 {
+		maxConcurrency = threads[len(threads)-1]
+	}
 
 	result := sweepPointsResult{MeasuredFrom: selected.run.CreatedAt, MeasuredTo: selected.run.UpdatedAt}
 	for _, c := range successful {
@@ -43,7 +47,7 @@ func buildSweepPoints(scenario string, successful []candidateRun, selected candi
 	}
 
 	for _, concurrency := range threads {
-		point, engineVersion, cpuArch, benchctlVersion, gotpcVersion, err := buildSweepPoint(scenario, concurrency, successful, selected, warehouses, scenarioDir)
+		point, engineVersion, cpuArch, benchctlVersion, gotpcVersion, err := buildSweepPoint(scenario, concurrency, maxConcurrency, successful, selected, warehouses, scenarioDir)
 		if err != nil {
 			return sweepPointsResult{}, err
 		}
@@ -71,7 +75,7 @@ func buildSweepPoints(scenario string, successful []candidateRun, selected candi
 // selected run's own data, plus the reference listing of every other
 // successful iteration's throughput at this concurrency (see
 // buildIterationEntries).
-func buildSweepPoint(scenario string, concurrency int, successful []candidateRun, selected candidateRun, warehouses *float64, scenarioDir string) (point sweepPointJSON, engineVersion, cpuArch, benchctlVersion, gotpcVersion string, err error) {
+func buildSweepPoint(scenario string, concurrency, maxConcurrency int, successful []candidateRun, selected candidateRun, warehouses *float64, scenarioDir string) (point sweepPointJSON, engineVersion, cpuArch, benchctlVersion, gotpcVersion string, err error) {
 	records := selected.metricsByThreads[concurrency]
 	tpm, err := tpmAt(records)
 	if err != nil {
@@ -93,7 +97,7 @@ func buildSweepPoint(scenario string, concurrency int, successful []candidateRun
 		workloadParams = map[string]any{"warehouses": *warehouses}
 	}
 
-	iterations, err := buildIterationEntries(scenario, concurrency, successful, selected, scenarioDir)
+	iterations, err := buildIterationEntries(scenario, concurrency, maxConcurrency, successful, selected, scenarioDir)
 	if err != nil {
 		return point, "", "", "", "", err
 	}
@@ -115,10 +119,12 @@ func buildSweepPoint(scenario string, concurrency int, successful []candidateRun
 // buildIterationEntries lists every successful iteration's throughput at
 // this concurrency -- not just the selected one -- so a reader can see the
 // full spread, sorted by iteration number for a stable order. Only the
-// selected iteration ever gets a raw-clients CSV written and referenced:
-// no pooling/intermingling across a test point's independent iterations
-// (selectRepresentativeRun's policy).
-func buildIterationEntries(scenario string, concurrency int, successful []candidateRun, selected candidateRun, scenarioDir string) ([]iterationEntry, error) {
+// selected iteration ever gets a raw-clients CSV written and referenced,
+// and only at the sweep's maximum concurrency (maxConcurrency): no
+// pooling/intermingling across a test point's independent iterations
+// (selectRepresentativeRun's policy), and one raw-clients CSV per sweep
+// rather than one per concurrency level.
+func buildIterationEntries(scenario string, concurrency, maxConcurrency int, successful []candidateRun, selected candidateRun, scenarioDir string) ([]iterationEntry, error) {
 	var iterations []iterationEntry
 	for _, c := range successful {
 		candidateRecords, ok := c.metricsByThreads[concurrency]
@@ -135,12 +141,14 @@ func buildIterationEntries(scenario string, concurrency int, successful []candid
 		if c.run.RunID == selected.run.RunID {
 			notes = strPtr("This iteration's data (median tpm at this test point's peak concurrency) is used " +
 				"for summary/workload_metrics below.")
-			if rawPath, ok := c.rawSamplesByThreads[concurrency]; ok {
-				relName := fmt.Sprintf("raw-clients-%d.csv", concurrency)
-				if err := writeRawClientsCSV(rawPath, filepath.Join(scenarioDir, relName)); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: %s: concurrency %d: could not write raw-clients csv: %v\n", scenario, concurrency, err)
-				} else {
-					rawMetricsFile = &relName
+			if concurrency == maxConcurrency {
+				if rawPath, ok := c.rawSamplesByThreads[concurrency]; ok {
+					relName := fmt.Sprintf("raw-clients-%d.csv", concurrency)
+					if err := writeRawClientsCSV(rawPath, filepath.Join(scenarioDir, relName)); err != nil {
+						fmt.Fprintf(os.Stderr, "warning: %s: concurrency %d: could not write raw-clients csv: %v\n", scenario, concurrency, err)
+					} else {
+						rawMetricsFile = &relName
+					}
 				}
 			}
 		} else {

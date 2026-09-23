@@ -491,6 +491,64 @@ func TestBuildResultDoc_RawClientsCSV_Idempotent(t *testing.T) {
 	}
 }
 
+// TestBuildResultDoc_RawClientsCSV_OnlyAtMaxConcurrency guards the sweep-wide
+// policy: a raw-clients CSV (and its raw_metrics_file reference) is only
+// produced at a sweep's maximum concurrency level, even though every
+// concurrency level's selected iteration carries the "used for
+// summary/workload_metrics" notes text.
+func TestBuildResultDoc_RawClientsCSV_OnlyAtMaxConcurrency(t *testing.T) {
+	dir := t.TempDir()
+	makeCandidateRun(t, dir, "run-a", 1, "6", 800.0, "", "")
+	candidate := makeCandidateRun(t, dir, "run-a", 1, "12", 1500.0, "", "")
+	candidates := []candidateRun{candidate}
+
+	m := &manifest.Manifest{Provider: "AWS", Workload: "tpcc"}
+	tp := &sweepstate.TestPoint{Tier: "medium", BoundType: "compute", SweepID: "sweep-1"}
+	def := &manifest.TestPointDef{Tier: "medium", BoundType: "compute", Set: map[string]string{"warehouses": "28"}}
+
+	scenarioDir := filepath.Join(dir, "scenario")
+	if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
+		t.Fatalf("mkdir scenarioDir: %v", err)
+	}
+
+	doc, err := buildResultDoc(resultDocInputs{Manifest: m, TestPoint: tp, Def: def, Successful: candidates, ManifestPath: "candidate.yaml", ScenarioDir: scenarioDir})
+	if err != nil {
+		t.Fatalf("buildResultDoc: %v", err)
+	}
+
+	if len(doc.Sweep) != 2 {
+		t.Fatalf("want 2 sweep points (concurrency 6 and 12), got %d", len(doc.Sweep))
+	}
+	for _, sp := range doc.Sweep {
+		if len(sp.Iterations) != 1 {
+			t.Fatalf("concurrency %d: want 1 iteration, got %d", sp.Concurrency, len(sp.Iterations))
+		}
+		it := sp.Iterations[0]
+		if it.Notes == nil || !strings.Contains(*it.Notes, "used for summary/workload_metrics below") {
+			t.Errorf("concurrency %d: notes = %v, want the summary/workload_metrics text regardless of concurrency", sp.Concurrency, it.Notes)
+		}
+		switch sp.Concurrency {
+		case 6:
+			if it.RawMetricsFile != nil {
+				t.Errorf("concurrency 6 (non-max): raw_metrics_file = %v, want nil", *it.RawMetricsFile)
+			}
+		case 12:
+			if it.RawMetricsFile == nil || *it.RawMetricsFile != "raw-clients-12.csv" {
+				t.Errorf("concurrency 12 (max): raw_metrics_file = %v, want %q", it.RawMetricsFile, "raw-clients-12.csv")
+			}
+		default:
+			t.Fatalf("unexpected concurrency %d", sp.Concurrency)
+		}
+	}
+
+	if _, err := os.Stat(filepath.Join(scenarioDir, "raw-clients-6.csv")); !os.IsNotExist(err) {
+		t.Errorf("raw-clients-6.csv: stat err = %v, want IsNotExist", err)
+	}
+	if _, err := os.Stat(filepath.Join(scenarioDir, "raw-clients-12.csv")); err != nil {
+		t.Errorf("raw-clients-12.csv: stat err = %v, want nil", err)
+	}
+}
+
 // TestToolVersionInfo covers toolVersionInfo's contract: benchctl_version
 // and gotpc_version are read off whichever record carries them first
 // (unlike pg_version, they're stamped onto every record, not one dedicated

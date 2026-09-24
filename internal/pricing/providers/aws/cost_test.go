@@ -14,17 +14,26 @@ func approxEqual(a, b float64) bool { return math.Abs(a-b) < epsilon }
 
 func fullItemSet() []pricing.Item {
 	return []pricing.Item{
-		{SKU: "COMPUTE", Unit: "Hrs", PriceUSD: 0.032, Attributes: map[string]string{"db_instance_type": "db.t4g.small"}},
+		{SKU: "COMPUTE", Unit: "Hrs", PriceUSD: 0.032, Attributes: map[string]string{"db_instance_type": "db.t4g.small", "vcpu": "2"}},
 		{SKU: "COMPUTE2", Unit: "Hrs", PriceUSD: 0.318, Attributes: map[string]string{"db_instance_type": "db.m6g.xlarge"}},
 		{SKU: "STORAGE", Unit: "GB-Mo", PriceUSD: 0.115, Attributes: map[string]string{"disk_type": "gp3"}},
 		{SKU: "STORAGE-IO2", Unit: "GB-Mo", PriceUSD: 0.125, Attributes: map[string]string{"disk_type": "io2"}},
 		{SKU: "IOPS", Unit: "IOPS-Mo", PriceUSD: 0.02, Attributes: map[string]string{"disk_type": "gp3"}},
 		{SKU: "IOPS-IO2", Unit: "IOPS-Mo", PriceUSD: 0.10, Attributes: map[string]string{"disk_type": "io2"}},
 		{SKU: "THROUGHPUT", Unit: "MBPS-Mo", PriceUSD: 0.08},
+		{SKU: "CPU-CREDITS-T4G", Unit: "vCPU-Hours", PriceUSD: 0.075, Attributes: map[string]string{"instance_family": "T4G"}},
 	}
 }
 
-func TestCost_ComputeAndStorageOnly_NoOverage(t *testing.T) {
+// TestCost_NoDiskOverage_ButCPUCreditOverageBilled prices db.t4g.small (a
+// burstable instance type) with disk usage exactly at baseline. Disk
+// overage is correctly zero, but cpu_credit_overage must still be billed:
+// db.t4g.small's on-demand rate only covers CPU up to its 20%-per-vCPU
+// baseline (see cpuCreditOverageUSD's doc comment for why a sustained
+// workload exhausts that baseline almost immediately), so pricing it as if
+// it had no burst-credit cost at all -- as this test did before this
+// component existed -- silently understated AWS's real sustained price.
+func TestCost_NoDiskOverage_ButCPUCreditOverageBilled(t *testing.T) {
 	c := Calculator{}
 	bd, err := c.Cost(fullItemSet(), pricing.CostInput{
 		InstanceType: "db.t4g.small", DiskGB: 20, IOPS: 3000, ThroughputMbps: 125,
@@ -34,6 +43,8 @@ func TestCost_ComputeAndStorageOnly_NoOverage(t *testing.T) {
 	}
 	wantCompute := 0.032 * pricing.HoursPerMonth
 	wantStorage := 0.115 * 20
+	// 2 vCPU * (1 - 0.20 baseline) = 1.6 overage vCPU-hr/hr, at $0.075/vCPU-hr.
+	wantCreditOverage := 0.075 * 1.6 * pricing.HoursPerMonth
 	if got := componentUSD(bd, "compute"); !approxEqual(got, wantCompute) {
 		t.Errorf("compute = %v, want %v", got, wantCompute)
 	}
@@ -46,9 +57,47 @@ func TestCost_ComputeAndStorageOnly_NoOverage(t *testing.T) {
 	if got := componentUSD(bd, "throughput_overage"); got != 0 {
 		t.Errorf("throughput_overage = %v, want 0 (provisioned throughput equals the default baseline)", got)
 	}
-	wantTotal := wantCompute + wantStorage
+	if got := componentUSD(bd, "cpu_credit_overage"); !approxEqual(got, wantCreditOverage) {
+		t.Errorf("cpu_credit_overage = %v, want %v", got, wantCreditOverage)
+	}
+	wantTotal := wantCompute + wantStorage + wantCreditOverage
 	if !approxEqual(bd.TotalUSD, wantTotal) {
 		t.Errorf("TotalUSD = %v, want %v", bd.TotalUSD, wantTotal)
+	}
+}
+
+// TestCost_NonBurstableInstance_NoCPUCreditOverage guards the other
+// direction: a non-burstable instance type (no "t" family in its name) must
+// get no cpu_credit_overage component at all, not a zero-valued one --
+// there's no baseline utilization concept, and no CPU Credits SKU, for
+// general-purpose/memory-optimized/compute-optimized instance classes.
+func TestCost_NonBurstableInstance_NoCPUCreditOverage(t *testing.T) {
+	c := Calculator{}
+	bd, err := c.Cost(fullItemSet(), pricing.CostInput{
+		InstanceType: "db.m6g.xlarge", DiskGB: 400, IOPS: 3000, ThroughputMbps: 125,
+	})
+	if err != nil {
+		t.Fatalf("Cost: %v", err)
+	}
+	if got := componentUSD(bd, "cpu_credit_overage"); got != -1 {
+		t.Errorf("cpu_credit_overage = %v, want absent (db.m6g.xlarge isn't a burstable instance type)", got)
+	}
+}
+
+// TestCost_BurstableWithoutBaselineTable_Errors: a burstable instance type
+// dbarenactl has never priced before must fail loudly, not silently guess a
+// baseline utilization -- see burstBaselines' doc comment.
+func TestCost_BurstableWithoutBaselineTable_Errors(t *testing.T) {
+	c := Calculator{}
+	items := append(fullItemSet(),
+		pricing.Item{SKU: "COMPUTE-T3-LARGE", Unit: "Hrs", PriceUSD: 0.0928, Attributes: map[string]string{"db_instance_type": "db.t3.large", "vcpu": "2"}},
+	)
+	_, err := c.Cost(items, pricing.CostInput{InstanceType: "db.t3.large", DiskGB: 20, IOPS: 3000, ThroughputMbps: 125})
+	if err == nil {
+		t.Fatal("expected an error for a burstable instance type with no documented CPU-credit baseline")
+	}
+	if !strings.Contains(err.Error(), "no documented CPU-credit baseline") {
+		t.Errorf("err = %v, want it to mention the missing baseline", err)
 	}
 }
 

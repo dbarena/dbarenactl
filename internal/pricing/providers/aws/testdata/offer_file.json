@@ -78,6 +78,13 @@
         "licenseModel": "License included",
         "instanceType": "db.t4g.small"
       }
+    },
+    "SKU_CPU_CREDITS": {
+      "productFamily": "CPU Credits",
+      "attributes": {
+        "databaseEngine": "PostgreSQL",
+        "instanceFamily": "T4G"
+      }
     }
   },
   "terms": {
@@ -177,6 +184,17 @@
               "description": "USD 0.050 per RDS db.t4g.small instance hour running PostgreSQL (License included)",
               "unit": "Hrs",
               "pricePerUnit": {"USD": "0.0500000000"}
+            }
+          }
+        }
+      },
+      "SKU_CPU_CREDITS": {
+        "SKU_CPU_CREDITS.JRTCKXETXF": {
+          "priceDimensions": {
+            "SKU_CPU_CREDITS.JRTCKXETXF.6YS6EN2CT7": {
+              "description": "USD 0.075 per vCPU-Hour of T4g CPU Credits",
+              "unit": "vCPU-Hours",
+              "pricePerUnit": {"USD": "0.0750000000"}
             }
           }
         }

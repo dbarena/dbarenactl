@@ -35,8 +35,8 @@ func TestFetch_FiltersToPostgresSingleAZ(t *testing.T) {
 		t.Fatalf("Fetch: %v", err)
 	}
 
-	if len(result.Items) != 6 {
-		t.Fatalf("got %d items, want 6 (instance+storage-gp3+storage-gp2+iops-gp3+iops-io1+throughput; mysql/multi-az/licensed excluded): %+v", len(result.Items), result.Items)
+	if len(result.Items) != 7 {
+		t.Fatalf("got %d items, want 7 (instance+storage-gp3+storage-gp2+iops-gp3+iops-io1+throughput+cpu-credits; mysql/multi-az/licensed excluded): %+v", len(result.Items), result.Items)
 	}
 
 	excludedFromByUnit := map[string]bool{"SKU_STORAGE_GP2": true, "SKU_IOPS_IO1": true}
@@ -49,7 +49,7 @@ func TestFetch_FiltersToPostgresSingleAZ(t *testing.T) {
 			t.Errorf("item %+v: Region = %q, want us-east-1", it, it.Region)
 		}
 	}
-	want := map[string]float64{"Hrs": 0.034, "GB-Mo": 0.115, "IOPS-Mo": 0.02, "MiBps-Mo": 0.08}
+	want := map[string]float64{"Hrs": 0.034, "GB-Mo": 0.115, "IOPS-Mo": 0.02, "MiBps-Mo": 0.08, "vCPU-Hours": 0.075}
 	for unit, price := range want {
 		if got := byUnit[unit]; got != price {
 			t.Errorf("unit %s: price = %v, want %v", unit, got, price)
@@ -90,6 +90,13 @@ func TestFetch_FiltersToPostgresSingleAZ(t *testing.T) {
 			// must not collapse onto the gp3 IOPS SKU above.
 			if it.Attributes["disk_type"] != "io1" {
 				t.Errorf("io1 IOPS item Attributes = %+v, want disk_type=io1, not collapsed onto gp3", it.Attributes)
+			}
+		case "SKU_CPU_CREDITS":
+			// Regression check: this product family carries neither
+			// deploymentOption nor licenseModel, unlike every other family
+			// extractItems keeps -- it must still survive the filter.
+			if it.Attributes["instance_family"] != "T4G" {
+				t.Errorf("CPU credits item Attributes = %+v, want instance_family=T4G", it.Attributes)
 			}
 		}
 		if it.Attributes["database_engine"] != "PostgreSQL" {

@@ -181,10 +181,11 @@ func TestComputePricing_PopulatesComponentsSummingToMonthlyUSD(t *testing.T) {
 		ID:        "snap-1",
 		FetchedAt: time.Date(2026, 9, 11, 2, 52, 44, 0, time.UTC),
 		Items: []pricing.Item{
-			{SKU: "COMPUTE", Unit: "Hrs", PriceUSD: 0.032, Attributes: map[string]string{"db_instance_type": "db.t4g.small"}},
+			{SKU: "COMPUTE", Unit: "Hrs", PriceUSD: 0.032, Attributes: map[string]string{"db_instance_type": "db.t4g.small", "vcpu": "2"}},
 			{SKU: "STORAGE", Unit: "GB-Mo", PriceUSD: 0.115, Attributes: map[string]string{"disk_type": "gp3"}},
 			{SKU: "IOPS", Unit: "IOPS-Mo", PriceUSD: 0.02, Attributes: map[string]string{"disk_type": "gp3"}},
 			{SKU: "THROUGHPUT", Unit: "MBPS-Mo", PriceUSD: 0.08},
+			{SKU: "CPU-CREDITS-T4G", Unit: "vCPU-Hours", PriceUSD: 0.075, Attributes: map[string]string{"instance_family": "T4G"}},
 		},
 	}
 	diskGB, iops, throughput := 20.0, 3000.0, 125.0
@@ -199,7 +200,7 @@ func TestComputePricing_PopulatesComponentsSummingToMonthlyUSD(t *testing.T) {
 		t.Fatal("computePricing returned nil pricingInfo, want non-nil")
 	}
 
-	wantNames := map[string]bool{"compute": false, "storage": false, "iops_overage": false, "throughput_overage": false}
+	wantNames := map[string]bool{"compute": false, "storage": false, "iops_overage": false, "throughput_overage": false, "cpu_credit_overage": false}
 	var gotTotal float64
 	for _, c := range out.Components {
 		if _, ok := wantNames[c.Name]; !ok {
@@ -243,10 +244,11 @@ func TestComputePricing_RoundsTpmPerDollarMonth(t *testing.T) {
 		ID:        "snap-1",
 		FetchedAt: time.Date(2026, 9, 11, 2, 52, 44, 0, time.UTC),
 		Items: []pricing.Item{
-			{SKU: "COMPUTE", Unit: "Hrs", PriceUSD: 0.0317, Attributes: map[string]string{"db_instance_type": "db.t4g.small"}},
+			{SKU: "COMPUTE", Unit: "Hrs", PriceUSD: 0.0317, Attributes: map[string]string{"db_instance_type": "db.t4g.small", "vcpu": "2"}},
 			{SKU: "STORAGE", Unit: "GB-Mo", PriceUSD: 0.115, Attributes: map[string]string{"disk_type": "gp3"}},
 			{SKU: "IOPS", Unit: "IOPS-Mo", PriceUSD: 0.02, Attributes: map[string]string{"disk_type": "gp3"}},
 			{SKU: "THROUGHPUT", Unit: "MBPS-Mo", PriceUSD: 0.08},
+			{SKU: "CPU-CREDITS-T4G", Unit: "vCPU-Hours", PriceUSD: 0.075, Attributes: map[string]string{"instance_family": "T4G"}},
 		},
 	}
 	diskGB, iops, throughput := 20.0, 3000.0, 125.0

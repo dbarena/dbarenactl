@@ -158,7 +158,6 @@ suite:
         - name: prepare-warehouses
           type: go-tpc
           command: prepare
-          once: true
           args:
             warehouses: "{{ inputs.warehouses }}"
             threads: "{{ inputs.prepare_threads }}"

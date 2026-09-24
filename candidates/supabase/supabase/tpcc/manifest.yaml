@@ -132,26 +132,11 @@ test_points:
       prepare_threads: "16"
       client_threads: "8,16,24,48"
       driver_instance_type: c8gd.2xlarge
+  # matches the cache-exceeding row above's iops (12,000); throughput rounded
+  # to 300 (cache-exceeding's own documented-baseline value is 297) and
+  # aligned with GCP's identical config at this tier.
   - tier: 2xlarge
     bound_type: cache-fit
-    variant: cost-optimized
-    set:
-      supabase_org_id: "{{ params.supabase_org_id }}"
-      region: "us-east-1"
-      project_size: 2xlarge
-      warehouses: "128"
-      disk_size_gb: "64"
-      disk_iops: "6000"
-      disk_throughput_mibps: "250"
-      prepare_threads: "16"
-      client_threads: "8,16,24,48"
-      driver_instance_type: c8gd.2xlarge
-  # performance-optimized: matches the cache-exceeding row above's iops (12,000); throughput rounded to
-  # 300 (cache-exceeding's own documented-baseline value is 297) and aligned with GCP's identical
-  # performance-optimized config at this tier
-  - tier: 2xlarge
-    bound_type: cache-fit
-    variant: performance-optimized
     set:
       supabase_org_id: "{{ params.supabase_org_id }}"
       region: "us-east-1"

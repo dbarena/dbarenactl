@@ -279,10 +279,48 @@ func TestBuildInstanceInfo_SetsDiskType(t *testing.T) {
 	diskGB := 64.0
 	pi := pricingInputs{instanceType: "db.m6g.xlarge", diskType: "gp3", diskGB: &diskGB}
 
-	info := buildInstanceInfo(nil, "aws/rds", pi, "x86_64", "PostgreSQL 17")
+	info := buildInstanceInfo(nil, "aws/rds", pi, "x86_64", "PostgreSQL 17", "", "")
 
 	if info.DiskType == nil || *info.DiskType != "gp3" {
 		t.Errorf("DiskType = %v, want %q", info.DiskType, "gp3")
+	}
+}
+
+// TestBuildInstanceInfo_SetsPgSettingsAndOrioleDBVersion covers the two
+// new instance fields sourced from benchctl's pg_settings/orioledb_version
+// metadata records.
+func TestBuildInstanceInfo_SetsPgSettingsAndOrioleDBVersion(t *testing.T) {
+	pi := pricingInputs{instanceType: "small"}
+
+	info := buildInstanceInfo(nil, "supabase/orioledb", pi, "aarch64", "PostgreSQL 17.11",
+		"shared_buffers=12800, work_mem=5120", "OrioleDB beta 17")
+
+	if info.PgSettings == nil || *info.PgSettings != "shared_buffers=12800, work_mem=5120" {
+		t.Errorf("PgSettings = %v, want the raw settings string", info.PgSettings)
+	}
+	if info.OrioleDBVersion == nil || *info.OrioleDBVersion != "OrioleDB beta 17" {
+		t.Errorf("OrioleDBVersion = %v, want %q", info.OrioleDBVersion, "OrioleDB beta 17")
+	}
+}
+
+// TestBuildInstanceInfo_OmitsPgSettingsAndOrioleDBVersionWhenAbsent asserts
+// that, unlike engine_version/cpu_arch, these two fields are dropped from
+// the marshaled JSON (not written as null) when benchctl reported neither
+// -- e.g. a non-OrioleDB engine, or a run that predates this capture.
+func TestBuildInstanceInfo_OmitsPgSettingsAndOrioleDBVersionWhenAbsent(t *testing.T) {
+	pi := pricingInputs{instanceType: "db.m6g.xlarge"}
+
+	info := buildInstanceInfo(nil, "aws/rds", pi, "x86_64", "PostgreSQL 17", "", "")
+
+	data, err := json.Marshal(info)
+	if err != nil {
+		t.Fatalf("marshal instanceInfo: %v", err)
+	}
+	if strings.Contains(string(data), "pg_settings") {
+		t.Errorf("expected no pg_settings key in %s", data)
+	}
+	if strings.Contains(string(data), "orioledb_version") {
+		t.Errorf("expected no orioledb_version key in %s", data)
 	}
 }
 
@@ -683,5 +721,161 @@ func TestBuildResultDoc_OmitsNetworkWhenTheRunPredatesTheProbe(t *testing.T) {
 	}
 	if strings.Contains(string(blob), "\"network\"") {
 		t.Errorf("sweep point JSON should omit the network key, got: %s", blob)
+	}
+}
+
+func TestPgSettingsInfo(t *testing.T) {
+	records := newOrderMetricRecords("8", 1000, "v1", "v2")
+	if got := pgSettingsInfo(records); got != "" {
+		t.Errorf("pgSettingsInfo = %q, want empty for records with no pg_settings row", got)
+	}
+
+	records = append(records, metricRecord{FixtureThreads: "8", Name: "pg_settings",
+		Value: "shared_buffers=12800, work_mem=5120"})
+	if got := pgSettingsInfo(records); got != "shared_buffers=12800, work_mem=5120" {
+		t.Errorf("pgSettingsInfo = %q, want the raw record value", got)
+	}
+}
+
+func TestOrioledbVersionInfo(t *testing.T) {
+	records := newOrderMetricRecords("8", 1000, "v1", "v2")
+	if got := orioledbVersionInfo(records); got != "" {
+		t.Errorf("orioledbVersionInfo = %q, want empty for a non-OrioleDB engine", got)
+	}
+
+	records = append(records, metricRecord{FixtureThreads: "8", Name: "orioledb_version", Value: "OrioleDB beta 17"})
+	if got := orioledbVersionInfo(records); got != "OrioleDB beta 17" {
+		t.Errorf("orioledbVersionInfo = %q, want %q", got, "OrioleDB beta 17")
+	}
+}
+
+func TestSizeBytesInfo(t *testing.T) {
+	records := newOrderMetricRecords("8", 1000, "v1", "v2")
+	if got := sizeBytesInfo(records, "db_size_before"); got != nil {
+		t.Errorf("sizeBytesInfo = %v, want nil for records with no matching row", *got)
+	}
+
+	records = append(records,
+		metricRecord{FixtureThreads: "8", Name: "db_size_before", Value: "total_bytes=2011349183"},
+		metricRecord{FixtureThreads: "8", Name: "db_size_after", Value: "total_bytes=2330599835"},
+		metricRecord{FixtureThreads: "8", Name: "wal_size_before", Value: "wal_bytes=863871697"},
+		metricRecord{FixtureThreads: "8", Name: "wal_size_after", Value: "wal_bytes=1077881251"},
+		metricRecord{FixtureThreads: "8", Name: "malformed_size", Value: "total_bytes=not-a-number"},
+	)
+	cases := []struct {
+		recordName string
+		want       int64
+	}{
+		{"db_size_before", 2011349183},
+		{"db_size_after", 2330599835},
+		{"wal_size_before", 863871697},
+		{"wal_size_after", 1077881251},
+	}
+	for _, c := range cases {
+		got := sizeBytesInfo(records, c.recordName)
+		if got == nil || *got != c.want {
+			t.Errorf("sizeBytesInfo(%q) = %v, want %d", c.recordName, got, c.want)
+		}
+	}
+	if got := sizeBytesInfo(records, "malformed_size"); got != nil {
+		t.Errorf("sizeBytesInfo(malformed_size) = %v, want nil for a non-numeric value", *got)
+	}
+}
+
+// TestBuildResultDoc_CarriesPgSettingsAndSizesIntoTheResult is the
+// end-to-end check that benchctl's pg_settings/orioledb_version/db and WAL
+// size metadata records reach instance and sweep[] respectively.
+func TestBuildResultDoc_CarriesPgSettingsAndSizesIntoTheResult(t *testing.T) {
+	dir := t.TempDir()
+	extra := []metricRecord{
+		{FixtureThreads: "12", Name: "pg_settings", Value: "shared_buffers=12800, work_mem=5120"},
+		{FixtureThreads: "12", Name: "orioledb_version", Value: "OrioleDB beta 17"},
+		{FixtureThreads: "12", Name: "db_size_before", Value: "total_bytes=2011349183"},
+		{FixtureThreads: "12", Name: "db_size_after", Value: "total_bytes=2330599835"},
+		{FixtureThreads: "12", Name: "wal_size_before", Value: "wal_bytes=863871697"},
+		{FixtureThreads: "12", Name: "wal_size_after", Value: "wal_bytes=1077881251"},
+	}
+	candidates := []candidateRun{
+		makeCandidateRun(t, dir, "run-a", 1, "12", 1500.0, "1.2.0", "latest", extra...),
+	}
+	scenarioDir := filepath.Join(dir, "scenario")
+	if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
+		t.Fatalf("mkdir scenarioDir: %v", err)
+	}
+
+	doc, err := buildResultDoc(resultDocInputs{
+		Manifest:     &manifest.Manifest{Provider: "Supabase", Product: "OrioleDB", Workload: "tpcc"},
+		TestPoint:    &sweepstate.TestPoint{Tier: "small", BoundType: "cache-fit", SweepID: "sweep-1"},
+		Def:          &manifest.TestPointDef{Tier: "small", BoundType: "cache-fit"},
+		Successful:   candidates,
+		ManifestPath: "candidate.yaml",
+		ScenarioDir:  scenarioDir,
+	})
+	if err != nil {
+		t.Fatalf("buildResultDoc: %v", err)
+	}
+
+	if got := doc.Instance.PgSettings; got == nil || *got != "shared_buffers=12800, work_mem=5120" {
+		t.Errorf("instance.pg_settings = %v, want the raw settings string", got)
+	}
+	if got := doc.Instance.OrioleDBVersion; got == nil || *got != "OrioleDB beta 17" {
+		t.Errorf("instance.orioledb_version = %v, want %q", got, "OrioleDB beta 17")
+	}
+
+	if len(doc.Sweep) != 1 {
+		t.Fatalf("want 1 sweep point, got %d", len(doc.Sweep))
+	}
+	sp := doc.Sweep[0]
+	for _, c := range []struct {
+		name string
+		got  *int64
+		want int64
+	}{
+		{"db_size_before", sp.DBSizeBefore, 2011349183},
+		{"db_size_after", sp.DBSizeAfter, 2330599835},
+		{"wal_size_before", sp.WALSizeBefore, 863871697},
+		{"wal_size_after", sp.WALSizeAfter, 1077881251},
+	} {
+		if c.got == nil || *c.got != c.want {
+			t.Errorf("sweep[0].%s = %v, want %d", c.name, c.got, c.want)
+		}
+	}
+}
+
+// TestBuildResultDoc_OmitsOrioleDBVersionForOtherEngines asserts
+// orioledb_version is dropped from the marshaled instance JSON entirely
+// (not written as null) when the engine under test isn't OrioleDB.
+func TestBuildResultDoc_OmitsOrioleDBVersionForOtherEngines(t *testing.T) {
+	dir := t.TempDir()
+	candidates := []candidateRun{makeCandidateRun(t, dir, "run-a", 1, "12", 1500.0, "1.2.0", "latest")}
+	scenarioDir := filepath.Join(dir, "scenario")
+	if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
+		t.Fatalf("mkdir scenarioDir: %v", err)
+	}
+
+	doc, err := buildResultDoc(resultDocInputs{
+		Manifest:     &manifest.Manifest{Provider: "AWS", Workload: "tpcc"},
+		TestPoint:    &sweepstate.TestPoint{Tier: "medium", BoundType: "compute", SweepID: "sweep-1"},
+		Def:          &manifest.TestPointDef{Tier: "medium", BoundType: "compute"},
+		Successful:   candidates,
+		ManifestPath: "candidate.yaml",
+		ScenarioDir:  scenarioDir,
+	})
+	if err != nil {
+		t.Fatalf("buildResultDoc: %v", err)
+	}
+	if doc.Instance.OrioleDBVersion != nil {
+		t.Errorf("instance.orioledb_version = %v, want nil", *doc.Instance.OrioleDBVersion)
+	}
+
+	blob, err := json.Marshal(doc.Instance)
+	if err != nil {
+		t.Fatalf("marshal instance: %v", err)
+	}
+	if strings.Contains(string(blob), "orioledb_version") {
+		t.Errorf("instance JSON should omit orioledb_version, got: %s", blob)
+	}
+	if strings.Contains(string(blob), "pg_settings") {
+		t.Errorf("instance JSON should omit pg_settings, got: %s", blob)
 	}
 }

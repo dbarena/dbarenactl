@@ -17,8 +17,22 @@ type sweepPointsResult struct {
 	CPUArch         string
 	BenchctlVersion string
 	GotpcVersion    string
+	PgSettings      string
+	OrioleDBVersion string
 	MeasuredFrom    time.Time
 	MeasuredTo      time.Time
+}
+
+// sweepPointMeta bundles the facts buildSweepPoint gleans from a
+// concurrency level's metadata records while assembling its sweepPointJSON,
+// for buildSweepPoints to aggregate up into sweepPointsResult.
+type sweepPointMeta struct {
+	EngineVersion   string
+	CPUArch         string
+	BenchctlVersion string
+	GotpcVersion    string
+	PgSettings      string
+	OrioleDBVersion string
 }
 
 // buildSweepPoints builds one sweepPointJSON per concurrency level the
@@ -47,21 +61,27 @@ func buildSweepPoints(scenario string, successful []candidateRun, selected candi
 	}
 
 	for _, concurrency := range threads {
-		point, engineVersion, cpuArch, benchctlVersion, gotpcVersion, err := buildSweepPoint(scenario, concurrency, maxConcurrency, successful, selected, warehouses, scenarioDir)
+		point, meta, err := buildSweepPoint(scenario, concurrency, maxConcurrency, successful, selected, warehouses, scenarioDir)
 		if err != nil {
 			return sweepPointsResult{}, err
 		}
-		// Only overwrite when this level actually reports a version -- a
-		// later level with no pg_version record shouldn't blank out an
-		// earlier level's answer.
-		if engineVersion != "" {
-			result.EngineVersion, result.CPUArch = engineVersion, cpuArch
+		// Only overwrite when this level actually reports a value -- a
+		// later level with no pg_version (or pg_settings/orioledb_version)
+		// record shouldn't blank out an earlier level's answer.
+		if meta.EngineVersion != "" {
+			result.EngineVersion, result.CPUArch = meta.EngineVersion, meta.CPUArch
 		}
-		if benchctlVersion != "" {
-			result.BenchctlVersion = benchctlVersion
+		if meta.BenchctlVersion != "" {
+			result.BenchctlVersion = meta.BenchctlVersion
 		}
-		if gotpcVersion != "" {
-			result.GotpcVersion = gotpcVersion
+		if meta.GotpcVersion != "" {
+			result.GotpcVersion = meta.GotpcVersion
+		}
+		if meta.PgSettings != "" {
+			result.PgSettings = meta.PgSettings
+		}
+		if meta.OrioleDBVersion != "" {
+			result.OrioleDBVersion = meta.OrioleDBVersion
 		}
 		result.Points = append(result.Points, point)
 	}
@@ -75,22 +95,24 @@ func buildSweepPoints(scenario string, successful []candidateRun, selected candi
 // selected run's own data, plus the reference listing of every other
 // successful iteration's throughput at this concurrency (see
 // buildIterationEntries).
-func buildSweepPoint(scenario string, concurrency, maxConcurrency int, successful []candidateRun, selected candidateRun, warehouses *float64, scenarioDir string) (point sweepPointJSON, engineVersion, cpuArch, benchctlVersion, gotpcVersion string, err error) {
+func buildSweepPoint(scenario string, concurrency, maxConcurrency int, successful []candidateRun, selected candidateRun, warehouses *float64, scenarioDir string) (point sweepPointJSON, meta sweepPointMeta, err error) {
 	records := selected.metricsByThreads[concurrency]
 	tpm, err := tpmAt(records)
 	if err != nil {
-		return point, "", "", "", "", fmt.Errorf("%s: concurrency %d: %w", scenario, concurrency, err)
+		return point, sweepPointMeta{}, fmt.Errorf("%s: concurrency %d: %w", scenario, concurrency, err)
 	}
 	p50, p95, p99, err := latencyFor(records, "NEW_ORDER")
 	if err != nil {
-		return point, "", "", "", "", fmt.Errorf("%s: concurrency %d: %w", scenario, concurrency, err)
+		return point, sweepPointMeta{}, fmt.Errorf("%s: concurrency %d: %w", scenario, concurrency, err)
 	}
 	txns, errs, err := buildTxnMetrics(records)
 	if err != nil {
-		return point, "", "", "", "", fmt.Errorf("%s: concurrency %d: %w", scenario, concurrency, err)
+		return point, sweepPointMeta{}, fmt.Errorf("%s: concurrency %d: %w", scenario, concurrency, err)
 	}
-	engineVersion, cpuArch = pgVersionInfo(records)
-	benchctlVersion, gotpcVersion = toolVersionInfo(records)
+	meta.EngineVersion, meta.CPUArch = pgVersionInfo(records)
+	meta.BenchctlVersion, meta.GotpcVersion = toolVersionInfo(records)
+	meta.PgSettings = pgSettingsInfo(records)
+	meta.OrioleDBVersion = orioledbVersionInfo(records)
 
 	var workloadParams map[string]any
 	if warehouses != nil {
@@ -99,13 +121,17 @@ func buildSweepPoint(scenario string, concurrency, maxConcurrency int, successfu
 
 	iterations, err := buildIterationEntries(scenario, concurrency, maxConcurrency, successful, selected, scenarioDir)
 	if err != nil {
-		return point, "", "", "", "", err
+		return point, sweepPointMeta{}, err
 	}
 
 	point = sweepPointJSON{
 		Concurrency:        concurrency,
 		WorkloadParameters: workloadParams,
 		Network:            networkRTTInfo(records),
+		DBSizeBefore:       sizeBytesInfo(records, "db_size_before"),
+		DBSizeAfter:        sizeBytesInfo(records, "db_size_after"),
+		WALSizeBefore:      sizeBytesInfo(records, "wal_size_before"),
+		WALSizeAfter:       sizeBytesInfo(records, "wal_size_after"),
 		Iterations:         iterations,
 		Summary: summaryInfo{
 			Throughput: throughputInfo{Metric: "tpm", Unit: "transactions/min", Transaction: strPtr("NEW_ORDER"), Value: tpm},
@@ -113,7 +139,7 @@ func buildSweepPoint(scenario string, concurrency, maxConcurrency int, successfu
 		},
 		WorkloadMetrics: &workloadMetrics{Transactions: txns, Errors: errs},
 	}
-	return point, engineVersion, cpuArch, benchctlVersion, gotpcVersion, nil
+	return point, meta, nil
 }
 
 // buildIterationEntries lists every successful iteration's throughput at

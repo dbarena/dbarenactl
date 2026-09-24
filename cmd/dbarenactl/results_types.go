@@ -33,6 +33,12 @@ type instanceInfo struct {
 	DiskType       *string  `json:"disk_type"`
 	CPUArch        *string  `json:"cpu_arch"`
 	EngineVersion  *string  `json:"engine_version"`
+	// PgSettings and OrioleDBVersion are omitempty (rather than the
+	// explicit-null convention above) because, like sweepPointJSON.Network,
+	// they're metadata benchctl only started emitting after older runs
+	// already existed -- absent means "not captured", not "unknown".
+	PgSettings      *string `json:"pg_settings,omitempty"`
+	OrioleDBVersion *string `json:"orioledb_version,omitempty"`
 }
 
 type loadGeneratorInfo struct {
@@ -116,12 +122,20 @@ type workloadMetrics struct {
 }
 
 type sweepPointJSON struct {
-	Concurrency        int              `json:"concurrency"`
-	WorkloadParameters map[string]any   `json:"workload_parameters,omitempty"`
-	Network            *networkInfo     `json:"network,omitempty"`
-	Iterations         []iterationEntry `json:"iterations"`
-	Summary            summaryInfo      `json:"summary"`
-	WorkloadMetrics    *workloadMetrics `json:"workload_metrics,omitempty"`
+	Concurrency        int            `json:"concurrency"`
+	WorkloadParameters map[string]any `json:"workload_parameters,omitempty"`
+	Network            *networkInfo   `json:"network,omitempty"`
+	// DBSize*/WALSize* are byte counts measured immediately before/after
+	// this concurrency level ran. omitempty for the same reason as
+	// Network: absent for Results published before this measurement
+	// existed.
+	DBSizeBefore    *int64           `json:"db_size_before,omitempty"`
+	DBSizeAfter     *int64           `json:"db_size_after,omitempty"`
+	WALSizeBefore   *int64           `json:"wal_size_before,omitempty"`
+	WALSizeAfter    *int64           `json:"wal_size_after,omitempty"`
+	Iterations      []iterationEntry `json:"iterations"`
+	Summary         summaryInfo      `json:"summary"`
+	WorkloadMetrics *workloadMetrics `json:"workload_metrics,omitempty"`
 }
 
 // networkInfo is the driver-to-target round trip measured just before this

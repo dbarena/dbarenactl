@@ -336,7 +336,7 @@ func buildResultDoc(in resultDocInputs) (*resultDoc, error) {
 	}
 
 	pricingFetcherKey := in.Manifest.PricingFetcherKey()
-	instance := buildInstanceInfo(in.Snapshot, pricingFetcherKey, pi, sp.CPUArch, sp.EngineVersion)
+	instance := buildInstanceInfo(in.Snapshot, pricingFetcherKey, pi, sp.CPUArch, sp.EngineVersion, sp.PgSettings, sp.OrioleDBVersion)
 	repro := buildReproducibility(in.TestPoint, in.ManifestPath, sp.BenchctlVersion, sp.GotpcVersion)
 
 	pricingOut, err := computePricing(in.Snapshot, pricingFetcherKey, pi, scenario, sp.Points)
@@ -364,7 +364,7 @@ func buildResultDoc(in resultDocInputs) (*resultDoc, error) {
 
 // buildInstanceInfo resolves vcpu/ram_gb (when a pricing snapshot is
 // available to derive them from) and assembles the result's instance block.
-func buildInstanceInfo(snapshot *pricing.Snapshot, pricingFetcherKey string, pi pricingInputs, cpuArch, engineVersion string) *instanceInfo {
+func buildInstanceInfo(snapshot *pricing.Snapshot, pricingFetcherKey string, pi pricingInputs, cpuArch, engineVersion, pgSettings, orioledbVersion string) *instanceInfo {
 	var vcpu, ramGB *float64
 	if snapshot != nil && pi.instanceType != "" {
 		if fn, ok := newVCPURAMFuncs()[pricingFetcherKey]; ok {
@@ -374,15 +374,17 @@ func buildInstanceInfo(snapshot *pricing.Snapshot, pricingFetcherKey string, pi 
 		}
 	}
 	return &instanceInfo{
-		InstanceType:   strPtr(pi.instanceType),
-		VCPU:           vcpu,
-		RAMGB:          ramGB,
-		DiskGB:         pi.diskGB,
-		IOPS:           pi.iops,
-		ThroughputMbps: pi.throughputMbps,
-		DiskType:       strPtr(pi.diskType),
-		CPUArch:        strPtr(cpuArch),
-		EngineVersion:  strPtr(engineVersion),
+		InstanceType:    strPtr(pi.instanceType),
+		VCPU:            vcpu,
+		RAMGB:           ramGB,
+		DiskGB:          pi.diskGB,
+		IOPS:            pi.iops,
+		ThroughputMbps:  pi.throughputMbps,
+		DiskType:        strPtr(pi.diskType),
+		CPUArch:         strPtr(cpuArch),
+		EngineVersion:   strPtr(engineVersion),
+		PgSettings:      strPtr(pgSettings),
+		OrioleDBVersion: strPtr(orioledbVersion),
 	}
 }
 

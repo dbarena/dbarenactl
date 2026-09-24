@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sort"
 	"time"
+
+	"github.com/dbarena/dbarenactl/internal/pricing"
 )
 
 // sweepPointsResult is buildSweepPoints' return: the assembled sweep points
@@ -135,7 +137,7 @@ func buildSweepPoint(scenario string, concurrency, maxConcurrency int, successfu
 		WALSizeAfter:       sizeBytesInfo(records, "wal_size_after"),
 		Iterations:         iterations,
 		Summary: summaryInfo{
-			Throughput: throughputInfo{Metric: "tpm", Unit: "transactions/min", Transaction: strPtr("NEW_ORDER"), Value: tpm},
+			Throughput: throughputInfo{Metric: "tpm", Unit: "transactions/min", Transaction: strPtr("NEW_ORDER"), Value: pricing.RoundTo(tpm, 0)},
 			LatencyMs:  latencyInfo{Transaction: strPtr("NEW_ORDER"), P50: p50, P95: p95, P99: p99},
 		},
 		WorkloadMetrics: &workloadMetrics{Transactions: txns, Errors: errs},
@@ -185,7 +187,7 @@ func buildIterationEntries(scenario string, concurrency, maxConcurrency int, suc
 			Iteration:      c.run.IterationAttempt,
 			StartedAt:      c.run.CreatedAt.UTC().Format(time.RFC3339),
 			CompletedAt:    c.run.UpdatedAt.UTC().Format(time.RFC3339),
-			Throughput:     candidateTpm,
+			Throughput:     pricing.RoundTo(candidateTpm, 0),
 			RawMetricsFile: rawMetricsFile,
 			Notes:          notes,
 		})

@@ -10,10 +10,6 @@ inputs:
     type: string
     required: true
     description: Supabase organization id for the target project
-  orioledb:
-    type: bool
-    default: true
-    description: Use OrioleDB as storage engine
   project_size:
     type: string
     default: small
@@ -85,11 +81,10 @@ target:
   config:
     region: "{{ inputs.region }}"
     org_id: "{{ inputs.supabase_org_id }}"
-    orioledb: "{{ inputs.orioledb }}"
-    # Fixed, not an input: this scenario exists to isolate the DB engine/hardware
-    # as the only variable in the Supabase-vs-RDS comparison. RDS has no HA
-    # add-on equivalent and no Supavisor-style pooler, so both are held fixed
-    # here rather than exposed as knobs. See docs/supabase-vs-rds-benchmark.md.
+    # to allow specifying a release channel
+    experimental: true
+    release_channel: ""
+    postgres_engine: ""
     high_availability: false
     connection_mode: direct
     profile: "{{ inputs.profile }}"
@@ -114,16 +109,12 @@ suite:
           args:
             name: pg_version
             query: "SELECT version()"
-        # To let this scenario support toggling the "orioledb" input boolean to false, ensure
-        # this SQL can run on vanilla Postgres too. For vanilla Postgres, it returns NULL. For
-        # OrioleDB, it returns the extension version. (Previously "SELECT orioledb_version()"
-        # was used, but that function does not exist on vanilla Postgres.)
         - name: get-orioledb-extension-version
           type: metadata
           command: sql
           args:
-            name: orioledb_extension_version
-            query: "SELECT extversion FROM pg_catalog.pg_extension WHERE extname = 'orioledb'"
+            name: orioledb_version
+            query: "SELECT orioledb_version()"
         - name: get-pg-settings
           type: metadata
           command: sql
@@ -134,7 +125,7 @@ suite:
             # formula, and the comparison targets each platform's managed
             # defaults rather than identical raw hardware.
             query: >-
-              SELECT string_agg(name || '=' || setting, ', ' ORDER BY name) FROM pg_settings WHERE name IN ('shared_buffers', 'work_mem', 'max_connections', 'effective_cache_size')
+              SELECT string_agg(name || '=' || setting, ', ' ORDER BY name) FROM pg_settings WHERE name IN ('shared_buffers', 'work_mem', 'max_connections', 'effective_cache_size', 'max_wal_size', 'checkpoint_completion_target', 'synchronous_commit')
         - name: network-rtt-baseline
           # Round trips from the driver (the EC2 instance, once bootstrapped) to
           # the target. Doesn't fix the fact that Supabase's AZ placement isn't

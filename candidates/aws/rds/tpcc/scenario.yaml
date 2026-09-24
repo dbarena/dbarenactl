@@ -115,7 +115,7 @@ suite:
             name: pg_settings
             # Captured for transparency, but we never tune the providers' defaults.
             query: >-
-              SELECT string_agg(name || '=' || setting, ', ' ORDER BY name) FROM pg_settings WHERE name IN ('shared_buffers', 'work_mem', 'max_connections', 'effective_cache_size')
+              SELECT string_agg(name || '=' || setting, ', ' ORDER BY name) FROM pg_settings WHERE name IN ('shared_buffers', 'work_mem', 'max_connections', 'effective_cache_size', 'max_wal_size', 'checkpoint_completion_target', 'synchronous_commit')
         - name: network-rtt-baseline
           # Colocation sanity check. The driver is deterministically pinned to the
           # same AZ as the RDS instance (see deployments/rds/postgres/main.tf),
@@ -143,6 +143,22 @@ suite:
             threads: "{{ fixture.client_threads }}"
             time: "{{ inputs.warmup_duration }}"
             interval: "10s"
+        - name: get-wal-size-before-benchmark
+          # Disk-sizing signal
+          type: metadata
+          command: sql
+          args:
+            name: wal_size_before
+            query: >-
+              SELECT 'wal_bytes=' || wal_bytes FROM pg_stat_wal
+        - name: get-db-size-before-benchmark
+          # Disk-sizing signal
+          type: metadata
+          command: sql
+          args:
+            name: db_size_before
+            query: >-
+              SELECT 'total_bytes=' || (pg_database_size(current_database()) + (SELECT COALESCE(sum(size), 0) FROM pg_ls_waldir()))::bigint
         - name: benchmark
           type: go-tpc
           command: run
@@ -151,18 +167,20 @@ suite:
             threads: "{{ fixture.client_threads }}"
             time: "{{ inputs.duration }}"
             interval: "10s"
-        - name: get-db-size
+        - name: get-wal-size-after-benchmark
           type: metadata
           command: sql
           args:
-            name: db_size
-            query: "SELECT pg_size_pretty(pg_database_size(current_database()))"
-        - name: get-wal-size
+            name: wal_size_after
+            query: >-
+              SELECT 'wal_bytes=' || wal_bytes FROM pg_stat_wal
+        - name: get-db-size-after-benchmark
           type: metadata
           command: sql
           args:
-            name: wal_size
-            query: "SELECT pg_size_pretty(COALESCE(sum(size), 0)) FROM pg_ls_waldir()"
+            name: db_size_after
+            query: >-
+              SELECT 'total_bytes=' || (pg_database_size(current_database()) + (SELECT COALESCE(sum(size), 0) FROM pg_ls_waldir()))::bigint
 driver:
   provider: ec2
   config:

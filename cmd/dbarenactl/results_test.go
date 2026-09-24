@@ -219,8 +219,8 @@ func TestComputePricing_PopulatesComponentsSummingToMonthlyUSD(t *testing.T) {
 	if math.Abs(gotTotal-out.MonthlyUSD) > 1e-9 {
 		t.Errorf("sum(Components.AmountUSD) = %v, want MonthlyUSD %v", gotTotal, out.MonthlyUSD)
 	}
-	if points[0].Summary.TpmcPerDollarMonth == nil {
-		t.Error("TpmcPerDollarMonth not backfilled onto sweep point")
+	if points[0].Summary.TpmPerDollarMonth == nil {
+		t.Error("TpmPerDollarMonth not backfilled onto sweep point")
 	}
 
 	data, err := json.Marshal(out)
@@ -235,10 +235,10 @@ func TestComputePricing_PopulatesComponentsSummingToMonthlyUSD(t *testing.T) {
 	}
 }
 
-// TestComputePricing_RoundsTpmcPerDollarMonth covers the reported
-// pseudoprecision bug (e.g. 3.879089433672162): tpmc_per_dollar_month must
+// TestComputePricing_RoundsTpmPerDollarMonth covers the reported
+// pseudoprecision bug (e.g. 3.879089433672162): tpm_per_dollar_month must
 // be rounded to 2 decimal places, not raw float64 division noise.
-func TestComputePricing_RoundsTpmcPerDollarMonth(t *testing.T) {
+func TestComputePricing_RoundsTpmPerDollarMonth(t *testing.T) {
 	snapshot := &pricing.Snapshot{
 		ID:        "snap-1",
 		FetchedAt: time.Date(2026, 9, 11, 2, 52, 44, 0, time.UTC),
@@ -258,18 +258,18 @@ func TestComputePricing_RoundsTpmcPerDollarMonth(t *testing.T) {
 		t.Fatalf("computePricing: %v", err)
 	}
 
-	got := points[0].Summary.TpmcPerDollarMonth
+	got := points[0].Summary.TpmPerDollarMonth
 	if got == nil {
-		t.Fatal("TpmcPerDollarMonth not backfilled onto sweep point")
+		t.Fatal("TpmPerDollarMonth not backfilled onto sweep point")
 	}
 	want := pricing.RoundTo(1000/out.MonthlyUSD, 2)
 	if *got != want {
-		t.Errorf("TpmcPerDollarMonth = %v, want %v", *got, want)
+		t.Errorf("TpmPerDollarMonth = %v, want %v", *got, want)
 	}
 	// Confirm no more than 2 decimal digits survive, not just that RoundTo
 	// was applied to the right inputs.
 	if rounded := pricing.RoundTo(*got, 2); rounded != *got {
-		t.Errorf("TpmcPerDollarMonth = %v has more than 2 decimal digits", *got)
+		t.Errorf("TpmPerDollarMonth = %v has more than 2 decimal digits", *got)
 	}
 }
 

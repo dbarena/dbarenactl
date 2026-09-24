@@ -91,7 +91,7 @@ type latencyInfo struct {
 type summaryInfo struct {
 	Throughput         throughputInfo `json:"throughput"`
 	LatencyMs          latencyInfo    `json:"latency_ms"`
-	TpmcPerDollarMonth *float64       `json:"tpmc_per_dollar_month"`
+	TpmPerDollarMonth *float64       `json:"tpm_per_dollar_month"`
 }
 
 type txnLatencyInfo struct {

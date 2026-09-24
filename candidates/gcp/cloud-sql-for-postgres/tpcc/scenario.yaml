@@ -69,16 +69,12 @@ inputs:
     description: Number of clients for the actual benchmark
   duration:
     type: duration
-    default: 30m
+    default: 60m
     description: Duration of the actual benchmark
   warmup_duration:
     type: duration
-    default: 5m
+    default: 30m
     description: Duration of the warmup phase for the benchmark
-  wal_settle_duration_secs:
-    type: int
-    default: 720
-    description: Pause time after the initial data load to allow for cooldown
   driver_instance_type:
     type: string
     # Load driver (GCE) machine type, independent of the target's capabilities. 
@@ -148,7 +144,7 @@ suite:
             # formula, and the comparison targets each platform's managed
             # defaults rather than identical raw hardware.
             query: >-
-              SELECT string_agg(name || '=' || setting, ', ' ORDER BY name) FROM pg_settings WHERE name IN ('shared_buffers', 'work_mem', 'max_connections', 'effective_cache_size')
+              SELECT string_agg(name || '=' || setting, ', ' ORDER BY name) FROM pg_settings WHERE name IN ('shared_buffers', 'work_mem', 'max_connections', 'effective_cache_size', 'max_wal_size', 'checkpoint_completion_target', 'synchronous_commit')
         - name: network-rtt-baseline
           # Colocation sanity check. The driver is deterministically pinned to the
           # same zone/VPC as the Cloud SQL instance, so this should read
@@ -162,27 +158,37 @@ suite:
         - name: prepare-warehouses
           type: go-tpc
           command: prepare
+          once: true
           args:
             warehouses: "{{ inputs.warehouses }}"
-            # parallelize data load
             threads: "{{ inputs.prepare_threads }}"
             no-check: ""
             dropdata: ""
-        - name: wal-settle-pause
-          # wait for a while to let the system cool down after the batch load
-          type: shell
-          args:
-            command: "sleep {{ inputs.wal_settle_duration_secs }}"
-        - name: warm-up
-          # Discarded: workloadMetrics is overwritten by the next (measured)
-          # go-tpc run step below, so this only serves to bring the connection
-          # pool and buffer cache to steady state before the timed window.
+        - name: warmup
+          # The metrics from this run are discarded and only meant to bring the system to a steady state.
           type: go-tpc
           command: run
           args:
             warehouses: "{{ inputs.warehouses }}"
             threads: "{{ fixture.client_threads }}"
             time: "{{ inputs.warmup_duration }}"
+            interval: "10s"
+        - name: get-wal-size-before-benchmark
+          # Disk-sizing signal
+          type: metadata
+          command: sql
+          args:
+            name: wal_size_before
+            query: >-
+              SELECT 'wal_bytes=' || wal_bytes FROM pg_stat_wal
+        - name: get-db-size-before-benchmark
+          # Disk-sizing signal
+          type: metadata
+          command: sql
+          args:
+            name: db_size_before
+            query: >-
+              SELECT 'total_bytes=' || (pg_database_size(current_database()) + (SELECT COALESCE(sum(size), 0) FROM pg_ls_waldir()))::bigint
         - name: benchmark
           type: go-tpc
           command: run
@@ -190,19 +196,21 @@ suite:
             warehouses: "{{ inputs.warehouses }}"
             threads: "{{ fixture.client_threads }}"
             time: "{{ inputs.duration }}"
-            interval: "1s"
-        - name: get-db-size
+            interval: "10s"
+        - name: get-wal-size-after-benchmark
           type: metadata
           command: sql
           args:
-            name: db_size
-            query: "SELECT pg_size_pretty(pg_database_size(current_database()))"
-        - name: get-wal-size
+            name: wal_size_after
+            query: >-
+              SELECT 'wal_bytes=' || wal_bytes FROM pg_stat_wal
+        - name: get-db-size-after-benchmark
           type: metadata
           command: sql
           args:
-            name: wal_size
-            query: "SELECT pg_size_pretty(COALESCE(sum(size), 0)) FROM pg_ls_waldir()"
+            name: db_size_after
+            query: >-
+              SELECT 'total_bytes=' || (pg_database_size(current_database()) + (SELECT COALESCE(sum(size), 0) FROM pg_ls_waldir()))::bigint
 driver:
   provider: gce
   config:

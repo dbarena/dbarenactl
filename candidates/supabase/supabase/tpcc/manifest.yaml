@@ -20,7 +20,8 @@ test_points:
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_type: "gp3"
-      client_threads: "1,2,4,8,12"
+      prepare_threads: "8"
+      client_threads: "2,4,8,12"
       driver_instance_type: c8gd.xlarge
   - tier: small
     bound_type: cache-fit
@@ -32,7 +33,8 @@ test_points:
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_throughput_mibps: "125"
-      client_threads: "1,2,4,8,12"
+      prepare_threads: "8"
+      client_threads: "2,4,8,12"
       driver_instance_type: c8gd.xlarge
   - tier: medium
     bound_type: cache-exceeding
@@ -45,7 +47,8 @@ test_points:
       disk_iops: "3000"
       disk_throughput_mibps: "125"
       disk_type: "gp3"
-      client_threads: "1,2,4,8,12"
+      prepare_threads: "8"
+      client_threads: "2,4,8,12"
       driver_instance_type: c8gd.xlarge
   - tier: medium
     bound_type: cache-fit
@@ -57,7 +60,8 @@ test_points:
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_throughput_mibps: "125"
-      client_threads: "1,2,4,8,12"
+      prepare_threads: "8"
+      client_threads: "2,4,8,12"
       driver_instance_type: c8gd.xlarge
   - tier: large
     bound_type: cache-exceeding
@@ -70,7 +74,8 @@ test_points:
       disk_iops: "3000"
       disk_throughput_mibps: "125"
       disk_type: "gp3"
-      client_threads: "1,2,4,8,12"
+      prepare_threads: "8"
+      client_threads: "2,4,8,12"
       driver_instance_type: c8gd.xlarge
   - tier: large
     bound_type: cache-fit
@@ -82,7 +87,8 @@ test_points:
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_throughput_mibps: "125"
-      client_threads: "1,2,4,8,12"
+      prepare_threads: "8"
+      client_threads: "2,4,8,12"
       driver_instance_type: c8gd.xlarge
   # 12,000 IOPS, matching RDS's floor at 400 GiB
   - tier: xlarge
@@ -96,7 +102,8 @@ test_points:
       disk_iops: "12000"
       disk_throughput_mibps: "149"
       disk_type: "gp3"
-      client_threads: "1,2,4,8,16,24"
+      prepare_threads: "8"
+      client_threads: "4,8,16,24"
       driver_instance_type: c8gd.xlarge
   - tier: xlarge
     bound_type: cache-fit
@@ -108,7 +115,8 @@ test_points:
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_throughput_mibps: "125"
-      client_threads: "1,2,4,8,16,24"
+      prepare_threads: "8"
+      client_threads: "4,8,16,24"
       driver_instance_type: c8gd.xlarge
   - tier: 2xlarge
     bound_type: cache-exceeding
@@ -121,7 +129,8 @@ test_points:
       disk_iops: "12000"
       disk_throughput_mibps: "297"
       disk_type: "gp3"
-      client_threads: "1,2,4,8,16,32,48"
+      prepare_threads: "16"
+      client_threads: "8,16,24,48"
       driver_instance_type: c8gd.2xlarge
   - tier: 2xlarge
     bound_type: cache-fit
@@ -134,7 +143,8 @@ test_points:
       disk_size_gb: "64"
       disk_iops: "6000"
       disk_throughput_mibps: "250"
-      client_threads: "1,2,4,8,16,32,48"
+      prepare_threads: "16"
+      client_threads: "8,16,24,48"
       driver_instance_type: c8gd.2xlarge
   # performance-optimized: matches the cache-exceeding row above's iops (12,000); throughput rounded to
   # 300 (cache-exceeding's own documented-baseline value is 297) and aligned with GCP's identical
@@ -150,7 +160,8 @@ test_points:
       disk_size_gb: "64"
       disk_iops: "12000"
       disk_throughput_mibps: "300"
-      client_threads: "1,2,4,8,16,32,48"
+      prepare_threads: "16"
+      client_threads: "8,16,24,48"
       driver_instance_type: c8gd.2xlarge
   - tier: 4xlarge
     bound_type: cache-exceeding
@@ -163,7 +174,8 @@ test_points:
       disk_iops: "20000"
       disk_throughput_mibps: "594"
       disk_type: "gp3"
-      client_threads: "1,2,4,8,16,32,64,96"
+      prepare_threads: "32"
+      client_threads: "16,32,64,128"
       driver_instance_type: c8gd.4xlarge
   - tier: 4xlarge
     bound_type: cache-fit
@@ -176,7 +188,8 @@ test_points:
       disk_size_gb: "128"
       disk_iops: "12000"
       disk_throughput_mibps: "500"
-      client_threads: "1,2,4,8,16,32,64,96"
+      prepare_threads: "32"
+      client_threads: "16,32,64,128"
       driver_instance_type: c8gd.4xlarge
   - tier: 4xlarge
     bound_type: cache-fit
@@ -189,7 +202,8 @@ test_points:
       disk_size_gb: "128"
       disk_iops: "20000"
       disk_throughput_mibps: "600"
-      client_threads: "1,2,4,8,16,32,64,96"
+      prepare_threads: "32"
+      client_threads: "16,32,64,128"
       driver_instance_type: c8gd.4xlarge
   - tier: 8xlarge
     bound_type: cache-exceeding
@@ -202,7 +216,8 @@ test_points:
       disk_iops: "40000"
       disk_throughput_mibps: "1188"
       disk_type: "gp3"
-      client_threads: "1,2,4,8,16,32,64,128,192"
+      prepare_threads: "32"
+      client_threads: "32,64,128,256"
       driver_instance_type: c8gd.8xlarge
   - tier: 8xlarge
     bound_type: cache-fit
@@ -215,7 +230,8 @@ test_points:
       disk_size_gb: "256"
       disk_iops: "12000"
       disk_throughput_mibps: "500"
-      client_threads: "1,2,4,8,16,32,64,128,192"
+      prepare_threads: "32"
+      client_threads: "32,64,128,256"
       driver_instance_type: c8gd.8xlarge
   - tier: 8xlarge
     bound_type: cache-fit
@@ -228,5 +244,6 @@ test_points:
       disk_size_gb: "256"
       disk_iops: "40000"
       disk_throughput_mibps: "1200"
-      client_threads: "1,2,4,8,16,32,64,128,192"
+      prepare_threads: "32"
+      client_threads: "32,64,128,256"
       driver_instance_type: c8gd.8xlarge

@@ -12,7 +12,8 @@ test_points:
     set:
       db_instance_class: db.t4g.small
       warehouses: "80"
-      client_threads: "1,2,4,8,12"
+      prepare_threads: "8"
+      client_threads: "2,4,8,12"
       driver_instance_type: c8gd.xlarge
       disk_size_gb: "20"
       disk_iops: "3000"
@@ -23,7 +24,8 @@ test_points:
     set:
       db_instance_class: db.t4g.small
       warehouses: "8"
-      client_threads: "1,2,4,8,12"
+      prepare_threads: "8"
+      client_threads: "2,4,8,12"
       driver_instance_type: c8gd.xlarge
       disk_size_gb: "20"
       disk_iops: "3000"
@@ -34,7 +36,8 @@ test_points:
     set:
       db_instance_class: db.t4g.medium
       warehouses: "160"
-      client_threads: "1,2,4,8,12"
+      prepare_threads: "8"
+      client_threads: "2,4,8,12"
       driver_instance_type: c8gd.xlarge
       disk_size_gb: "32"
       disk_iops: "3000"
@@ -45,7 +48,8 @@ test_points:
     set:
       db_instance_class: db.t4g.medium
       warehouses: "16"
-      client_threads: "1,2,4,8,12"
+      prepare_threads: "8"
+      client_threads: "2,4,8,12"
       driver_instance_type: c8gd.xlarge
       disk_size_gb: "20"
       disk_iops: "3000"
@@ -56,7 +60,8 @@ test_points:
     set:
       db_instance_class: db.m9g.large
       warehouses: "320"
-      client_threads: "1,2,4,8,12"
+      prepare_threads: "8"
+      client_threads: "2,4,8,12"
       driver_instance_type: c8gd.xlarge
       disk_size_gb: "64"
       disk_iops: "3000"
@@ -67,7 +72,8 @@ test_points:
     set:
       db_instance_class: db.m9g.large
       warehouses: "32"
-      client_threads: "1,2,4,8,12"
+      prepare_threads: "8"
+      client_threads: "2,4,8,12"
       driver_instance_type: c8gd.xlarge
       disk_size_gb: "20"
       disk_iops: "3000"
@@ -81,7 +87,8 @@ test_points:
       disk_size_gb: "400"
       disk_iops: "12000"
       disk_throughput_mibps: "500"
-      client_threads: "1,2,4,8,16,24"
+      prepare_threads: "8"
+      client_threads: "4,8,16,24"
       driver_instance_type: c8gd.xlarge
     pricing:
       disk_type: gp3
@@ -93,7 +100,8 @@ test_points:
     set:
       db_instance_class: db.m9g.xlarge
       warehouses: "64"
-      client_threads: "1,2,4,8,16,24"
+      prepare_threads: "8"
+      client_threads: "4,8,16,24"
       driver_instance_type: c8gd.xlarge
       disk_size_gb: "20"
       disk_iops: "3000"
@@ -107,7 +115,8 @@ test_points:
       disk_size_gb: "400"
       disk_iops: "12000"
       disk_throughput_mibps: "500"
-      client_threads: "1,2,4,8,16,32,48"
+      prepare_threads: "16"
+      client_threads: "8,16,24,48"
       driver_instance_type: c8gd.2xlarge
     pricing:
       disk_type: gp3
@@ -120,7 +129,8 @@ test_points:
     set:
       db_instance_class: db.m9g.2xlarge
       warehouses: "128"
-      client_threads: "1,2,4,8,16,32,48"
+      prepare_threads: "16"
+      client_threads: "8,16,24,48"
       driver_instance_type: c8gd.2xlarge
       disk_size_gb: "64"
     pricing:
@@ -131,7 +141,8 @@ test_points:
     set:
       db_instance_class: db.m9g.2xlarge
       warehouses: "128"
-      client_threads: "1,2,4,8,16,32,48"
+      prepare_threads: "16"
+      client_threads: "8,16,24,48"
       driver_instance_type: c8gd.2xlarge
       disk_size_gb: "400"
       disk_iops: "12000"
@@ -149,7 +160,8 @@ test_points:
     set:
       db_instance_class: db.m9g.4xlarge
       warehouses: "2560"
-      client_threads: "1,2,4,8,16,32,64,96"
+      prepare_threads: "32"
+      client_threads: "16,32,64,128"
       driver_instance_type: c8gd.4xlarge
       disk_size_gb: "512"
       disk_iops: "20000"
@@ -164,7 +176,8 @@ test_points:
     set:
       db_instance_class: db.m9g.4xlarge
       warehouses: "256"
-      client_threads: "1,2,4,8,16,32,64,96"
+      prepare_threads: "32"
+      client_threads: "16,32,64,128"
       driver_instance_type: c8gd.4xlarge
       disk_size_gb: "400"
       disk_iops: "12000"
@@ -179,7 +192,8 @@ test_points:
     set:
       db_instance_class: db.m9g.4xlarge
       warehouses: "256"
-      client_threads: "1,2,4,8,16,32,64,96"
+      prepare_threads: "32"
+      client_threads: "16,32,64,128"
       driver_instance_type: c8gd.4xlarge
       disk_size_gb: "400"
       disk_iops: "20000"
@@ -193,7 +207,8 @@ test_points:
     set:
       db_instance_class: db.m9g.8xlarge
       warehouses: "5120"
-      client_threads: "1,2,4,8,16,32,64,128,192"
+      prepare_threads: "32"
+      client_threads: "32,64,128,256"
       driver_instance_type: c8gd.8xlarge
       disk_size_gb: "1024"
       disk_iops: "40000"
@@ -208,7 +223,8 @@ test_points:
     set:
       db_instance_class: db.m9g.8xlarge
       warehouses: "512"
-      client_threads: "1,2,4,8,16,32,64,128,192"
+      prepare_threads: "32"
+      client_threads: "32,64,128,256"
       driver_instance_type: c8gd.8xlarge
       disk_size_gb: "400"
       disk_iops: "12000"
@@ -223,7 +239,8 @@ test_points:
     set:
       db_instance_class: db.m9g.8xlarge
       warehouses: "512"
-      client_threads: "1,2,4,8,16,32,64,128,192"
+      prepare_threads: "32"
+      client_threads: "32,64,128,256"
       driver_instance_type: c8gd.8xlarge
       disk_size_gb: "400"
       disk_iops: "40000"

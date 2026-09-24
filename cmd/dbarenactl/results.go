@@ -410,7 +410,7 @@ func buildReproducibility(tp *sweepstate.TestPoint, manifestPath, benchctlVersio
 }
 
 // computePricing computes the result's pricing block and backfills
-// tpmc_per_dollar_month onto every sweep point in place. Returns (nil, nil)
+// tpm_per_dollar_month onto every sweep point in place. Returns (nil, nil)
 // when there's no pricing snapshot -- pricing: null is expected, not an
 // error. Returns an error only when a snapshot exists but no cost
 // calculator is registered for pricingFetcherKey (a real configuration
@@ -457,12 +457,12 @@ func computePricing(snapshot *pricing.Snapshot, pricingFetcherKey string, pi pri
 		Components:   components,
 	}
 	for i := range points {
-		// tpmc_per_dollar_month is a throughput/dollar ratio, not currency --
+		// tpm_per_dollar_month is a throughput/dollar ratio, not currency --
 		// rounded to 2 decimal places (a separate policy from
 		// pricing.MoneyDecimals) to drop float64 division noise without
 		// implying more precision than the underlying measurement supports.
 		v := pricing.RoundTo(points[i].Summary.Throughput.Value/pricingOut.MonthlyUSD, 2)
-		points[i].Summary.TpmcPerDollarMonth = &v
+		points[i].Summary.TpmPerDollarMonth = &v
 	}
 	return pricingOut, nil
 }

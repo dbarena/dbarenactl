@@ -143,6 +143,7 @@ suite:
             warehouses: "{{ inputs.warehouses }}"
             threads: "{{ fixture.client_threads }}"
             time: "{{ inputs.warmup_duration }}"
+            interval: "10s"
         - name: benchmark
           type: go-tpc
           command: run

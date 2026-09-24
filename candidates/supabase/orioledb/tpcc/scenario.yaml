@@ -161,6 +161,7 @@ suite:
             warehouses: "{{ inputs.warehouses }}"
             threads: "{{ fixture.client_threads }}"
             time: "{{ inputs.warmup_duration }}"
+            interval: "10s"
         - name: get-wal-size-before-benchmark
           # Disk-sizing signal
           type: metadata

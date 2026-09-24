@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/dbarena/dbarenactl/internal/pricing"
 	"github.com/dbarena/dbarenactl/internal/sweepstate"
 )
 
@@ -236,7 +237,7 @@ func buildTxnMetrics(records []metricRecord) (map[string]txnMetrics, map[string]
 			}
 		}
 		if found {
-			txns[name] = txnMetrics{Count: count, Tpm: tpm, LatencyMs: lat}
+			txns[name] = txnMetrics{Count: count, Tpm: pricing.RoundTo(tpm, 0), LatencyMs: lat}
 		}
 
 		// An "error" status tpcc_tpm record is the workload's _ERR

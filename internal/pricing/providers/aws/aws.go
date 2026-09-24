@@ -117,26 +117,38 @@ func (f *Fetcher) Fetch(ctx context.Context, providerID, region string) (*pricin
 	return result, nil
 }
 
-// extractItems keeps only PostgreSQL, Single-AZ products (additionally
-// requiring "No license required" for Database Instance rows, matched
+// extractItems keeps only PostgreSQL products (additionally requiring
+// "Single-AZ" deployment for the families that carry that attribute, and
+// "No license required" for Database Instance rows, matched
 // case-insensitively since AWS's own docs/console title-case this value
 // while the Price List API returns it in sentence case), and builds one
 // Item per on-demand price dimension found for each.
+//
+// "CPU Credits" rows: the surcharge RDS bills once a burstable (T-family)
+// instance exhausts its baseline CPU credits under Unlimited mode, see
+// cost.go's cpuCreditOverageUSD, carry neither a deploymentOption nor a
+// licenseModel attribute (there's exactly one row per instanceFamily+
+// databaseEngine, not per deployment/license variant), so they're matched
+// on databaseEngine alone.
 func extractItems(offer offerFile, region string) ([]pricing.Item, error) {
 	var items []pricing.Item
 	for sku, p := range offer.Products {
 		if p.Attributes["databaseEngine"] != "PostgreSQL" {
 			continue
 		}
-		if p.Attributes["deploymentOption"] != "Single-AZ" {
-			continue
-		}
 		switch p.ProductFamily {
 		case "Database Instance":
+			if p.Attributes["deploymentOption"] != "Single-AZ" {
+				continue
+			}
 			if !strings.EqualFold(p.Attributes["licenseModel"], "No license required") {
 				continue
 			}
 		case "Database Storage", "Provisioned IOPS", "Provisioned Throughput":
+			if p.Attributes["deploymentOption"] != "Single-AZ" {
+				continue
+			}
+		case "CPU Credits":
 			// no further filtering
 		default:
 			continue

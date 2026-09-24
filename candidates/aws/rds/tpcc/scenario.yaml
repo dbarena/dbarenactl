@@ -73,7 +73,7 @@ inputs:
     description: Instance type of the load driver instance
   metrics_enabled:
     type: bool
-    default: false
+    default: true
     description: Whether to capture metrics on the load driver instance
   metrics_interval_secs:
     type: int

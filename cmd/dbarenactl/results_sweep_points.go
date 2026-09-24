@@ -128,6 +128,7 @@ func buildSweepPoint(scenario string, concurrency, maxConcurrency int, successfu
 		Concurrency:        concurrency,
 		WorkloadParameters: workloadParams,
 		Network:            networkRTTInfo(records),
+		LoadDriver:         loadDriverInfoFrom(records),
 		DBSizeBefore:       sizeBytesInfo(records, "db_size_before"),
 		DBSizeAfter:        sizeBytesInfo(records, "db_size_after"),
 		WALSizeBefore:      sizeBytesInfo(records, "wal_size_before"),

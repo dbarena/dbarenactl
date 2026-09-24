@@ -122,9 +122,10 @@ type workloadMetrics struct {
 }
 
 type sweepPointJSON struct {
-	Concurrency        int            `json:"concurrency"`
-	WorkloadParameters map[string]any `json:"workload_parameters,omitempty"`
-	Network            *networkInfo   `json:"network,omitempty"`
+	Concurrency        int             `json:"concurrency"`
+	WorkloadParameters map[string]any  `json:"workload_parameters,omitempty"`
+	Network            *networkInfo    `json:"network,omitempty"`
+	LoadDriver         *loadDriverInfo `json:"load_driver,omitempty"`
 	// DBSize*/WALSize* are byte counts measured immediately before/after
 	// this concurrency level ran. omitempty for the same reason as
 	// Network: absent for Results published before this measurement
@@ -148,6 +149,28 @@ type networkInfo struct {
 	RTTP99Us    int64 `json:"rtt_p99_us"`
 	RTTMaxUs    int64 `json:"rtt_max_us"`
 	Samples     int64 `json:"samples"`
+}
+
+// percentileInfo is the p99/p99.9/p99.99 breakdown benchctl's hostmetrics
+// package reports for a single driver host metric.
+type percentileInfo struct {
+	P99   float64 `json:"p99"`
+	P999  float64 `json:"p99_9"`
+	P9999 float64 `json:"p99_99"`
+}
+
+type networkThroughputInfo struct {
+	Receive  percentileInfo `json:"receive"`
+	Transmit percentileInfo `json:"transmit"`
+}
+
+// loadDriverInfo is the load driver's own host metrics (CPU, network),
+// captured via Vector while this concurrency level ran. Like networkInfo,
+// it's omitted for runs made before this capture existed, or where
+// metrics_enabled was false.
+type loadDriverInfo struct {
+	CPUUtilization               percentileInfo        `json:"cpu_utilization"`
+	NetworkThroughputBytesPerSec networkThroughputInfo `json:"network_throughput_bytes_per_sec"`
 }
 
 func strPtr(s string) *string {

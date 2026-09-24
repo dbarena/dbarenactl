@@ -26,6 +26,7 @@ type metricRecord struct {
 	Status          string `json:"status,omitempty"`
 	Transaction     string `json:"transaction,omitempty"`
 	Quantile        string `json:"quantile,omitempty"`
+	Direction       string `json:"direction,omitempty"`
 	Step            string `json:"step,omitempty"`
 	Value           any    `json:"value"`
 	BenchctlVersion string `json:"benchctl_version,omitempty"`
@@ -420,6 +421,59 @@ func parseNetworkRTT(value string) *networkInfo {
 		RTTMaxUs:    fields["max_us"],
 		Samples:     fields["samples"],
 	}
+}
+
+// driverQuantiles are the quantile label values benchctl's hostmetrics
+// package reports for driver_cpu_utilization and
+// driver_network_throughput_bytes_per_sec points, paired with the
+// percentileInfo field they fill.
+var driverQuantiles = map[string]func(*percentileInfo) *float64{
+	"0.99":   func(p *percentileInfo) *float64 { return &p.P99 },
+	"0.999":  func(p *percentileInfo) *float64 { return &p.P999 },
+	"0.9999": func(p *percentileInfo) *float64 { return &p.P9999 },
+}
+
+// loadDriverInfoFrom returns the load driver's host CPU/network metrics
+// parsed from driver_cpu_utilization/driver_network_throughput_bytes_per_sec
+// records at this concurrency level, if present. Like networkRTTInfo, it
+// returns nil unless every quantile (and, for network, both directions) is
+// present, so a partial parse never publishes a half-filled block.
+func loadDriverInfoFrom(records []metricRecord) *loadDriverInfo {
+	var info loadDriverInfo
+	seenCPU := map[string]bool{}
+	seenNetwork := map[string]bool{}
+	for _, r := range records {
+		setPercentile, ok := driverQuantiles[r.Quantile]
+		if !ok {
+			continue
+		}
+		switch r.Name {
+		case "driver_cpu_utilization":
+			v, err := r.floatValue()
+			if err != nil {
+				continue
+			}
+			*setPercentile(&info.CPUUtilization) = v
+			seenCPU[r.Quantile] = true
+		case "driver_network_throughput_bytes_per_sec":
+			v, err := r.floatValue()
+			if err != nil {
+				continue
+			}
+			switch r.Direction {
+			case "receive":
+				*setPercentile(&info.NetworkThroughputBytesPerSec.Receive) = v
+				seenNetwork["receive/"+r.Quantile] = true
+			case "transmit":
+				*setPercentile(&info.NetworkThroughputBytesPerSec.Transmit) = v
+				seenNetwork["transmit/"+r.Quantile] = true
+			}
+		}
+	}
+	if len(seenCPU) != len(driverQuantiles) || len(seenNetwork) != 2*len(driverQuantiles) {
+		return nil
+	}
+	return &info
 }
 
 // toolVersionInfo returns (benchctl_version, gotpc_version) from a

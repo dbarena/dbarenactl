@@ -313,6 +313,66 @@ func pgVersionInfo(records []metricRecord) (version, cpuArch string) {
 	return "", ""
 }
 
+// pgSettingsInfo returns the raw value of a pg_settings metadata record, if
+// present at this concurrency level -- one flat, comma-separated
+// "key=value" string exactly as benchctl captured it, not parsed further.
+func pgSettingsInfo(records []metricRecord) string {
+	for _, r := range records {
+		if r.Name != "pg_settings" {
+			continue
+		}
+		v, err := r.stringValue()
+		if err != nil {
+			continue
+		}
+		return v
+	}
+	return ""
+}
+
+// orioledbVersionInfo returns the raw value of an orioledb_version metadata
+// record, if present. benchctl only emits this record when the engine
+// under test is OrioleDB.
+func orioledbVersionInfo(records []metricRecord) string {
+	for _, r := range records {
+		if r.Name != "orioledb_version" {
+			continue
+		}
+		v, err := r.stringValue()
+		if err != nil {
+			continue
+		}
+		return v
+	}
+	return ""
+}
+
+// sizeBytesInfo returns the integer byte count from a recordName metadata
+// record shaped like "total_bytes=2330599835" or "wal_bytes=1077881251", if
+// present at this concurrency level. nil when absent or malformed, matching
+// parseNetworkRTT's policy of never publishing a half-parsed value.
+func sizeBytesInfo(records []metricRecord, recordName string) *int64 {
+	for _, r := range records {
+		if r.Name != recordName {
+			continue
+		}
+		v, err := r.stringValue()
+		if err != nil {
+			continue
+		}
+		_, raw, ok := strings.Cut(v, "=")
+		if !ok {
+			continue
+		}
+		n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err != nil {
+			continue
+		}
+		return &n
+	}
+	return nil
+}
+
 // networkRTTInfo returns the driver-to-target round trip parsed from a
 // network_rtt metadata record, if present at this concurrency level. A record
 // that is absent or malformed yields nil: runs made before the probe existed

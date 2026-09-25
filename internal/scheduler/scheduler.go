@@ -10,8 +10,10 @@
 //     independently of the successes a test point still needs;
 //   - a run found "launching" at the start of a resume is orphan-detected
 //     from benchctl's own state, not from a guess at timing;
-//   - a stale heartbeat during workload.execute is only ever a warning,
-//     never an automatic teardown.
+//   - a stale heartbeat during workload.execute fails the run and tears its
+//     environment down. The signal cannot be disambiguated from here (see
+//     failStaleRun) and either cause leaves benchctl's view of the run frozen,
+//     so the run would otherwise hold its slot forever.
 //
 // Provisioning is the one operation that blocks for tens of minutes (project
 // create, disk resize, tofu apply, ssh bootstrap), so it runs on a background
@@ -420,7 +422,7 @@ func (s *Scheduler) reconcileRun(ctx context.Context, sweepID string, run *sweep
 	case sweepstate.RunLaunching:
 		return s.reconcileLaunching(ctx, sweepID, run)
 	case sweepstate.RunWaitingRemote:
-		return s.reconcileWaitingRemote(ctx, sweepID, run)
+		return s.reconcileWaitingRemote(ctx, sweepID, run, opts)
 	case sweepstate.RunNeedsResultsPull:
 		return s.reconcileNeedsResultsPull(ctx, sweepID, run, opts)
 	case sweepstate.RunNeedsTeardown:
@@ -517,7 +519,7 @@ func (s *Scheduler) reconcileLaunching(ctx context.Context, sweepID string, run 
 	return true, s.Store.DeleteRun(run.RunID)
 }
 
-func (s *Scheduler) reconcileWaitingRemote(ctx context.Context, sweepID string, run *sweepstate.Run) (bool, error) {
+func (s *Scheduler) reconcileWaitingRemote(ctx context.Context, sweepID string, run *sweepstate.Run, opts Options) (bool, error) {
 	rs, err := s.Bench.Status(ctx, run.RunID)
 	if errors.Is(err, bench.ErrBenchctlUnusable) {
 		if rerr := s.Store.RecordError(sweepID, ActionStatus, run.RunID, err.Error()); rerr != nil {
@@ -534,16 +536,17 @@ func (s *Scheduler) reconcileWaitingRemote(ctx context.Context, sweepID string, 
 		return false, nil
 	}
 
-	if rs.Stale(s.now()) {
-		s.logf("warning: run %s has been stale for over %s -- may be dead, or alive but unable to report (see benchctl's state-store docs on driver-side token expiry). Not tearing down automatically; investigate with `benchctl connect %s driver`.",
-			run.RunID, bench.StaleThreshold, run.RunID)
-	}
-
 	if rs.CompletedAt == nil {
 		if rs.TerminatedWithoutCompleting() {
 			s.markf("✗", "%s: environment terminated without the workload completing after %s -- finalizing as failed",
 				run.RunID, s.now().Sub(run.CreatedAt).Round(time.Second))
 			return true, s.Store.FinalizeRun(run.RunID, "failure")
+		}
+		// Checked after TerminatedWithoutCompleting: if the environment is
+		// already gone, that branch finalizes without a teardown, and calling
+		// Teardown on torn-down infrastructure would stop the whole sweep.
+		if rs.Stale(s.now()) {
+			return s.failStaleRun(ctx, run, opts)
 		}
 		return false, nil
 	}
@@ -561,6 +564,38 @@ func (s *Scheduler) reconcileWaitingRemote(ctx context.Context, sweepID string, 
 	// rounding to the second is plenty accurate.
 	s.markf(mark, "%s: workload finished (%s) after %s", run.RunID, outcome, s.now().Sub(run.CreatedAt).Round(time.Second))
 	return true, s.Store.SetRunStatus(run.RunID, sweepstate.RunNeedsResultsPull)
+}
+
+// failStaleRun finalizes a run that stopped reporting heartbeats. The signal is
+// ambiguous: the driver may be dead, or alive but unable to report after its
+// store token expired and dbarenactl cannot tell the two apart.
+//
+// Either way benchctl's view of the run is frozen, so it can never reach a
+// terminal state on its own. Therefore the run is terminated.
+func (s *Scheduler) failStaleRun(ctx context.Context, run *sweepstate.Run, opts Options) (bool, error) {
+	s.markf("✗", "%s: no heartbeat for over %s -- finalizing as failed and tearing down",
+		run.RunID, bench.StaleThreshold)
+
+	// Best effort: the driver's resume.log and any partial results are the only
+	// evidence of why it stopped reporting, and they die with the instance. A
+	// fetch failure is the expected case when the driver is gone, so unlike
+	// reconcileNeedsResultsPull's fetch it must never stop the sweep.
+	dest := filepath.Join(opts.ArtifactBaseDir, run.RunID)
+	if err := s.Bench.Fetch(ctx, run.RunID, dest); err != nil {
+		s.logf("%s: could not fetch diagnostics from the stale run: %v", run.RunID, err)
+	} else if err := s.Store.SetRunArtifactDir(run.RunID, dest); err != nil {
+		return false, err
+	}
+
+	// Recording the outcome up front leaves the teardown itself to
+	// reconcileNeedsTeardown, which finalizes with run.Outcome and so charges
+	// the test point's failure budget. "failure" also keeps the partial
+	// artifacts out of the results (see cmd/dbarenactl/results.go), while
+	// leaving them on disk to diagnose.
+	if err := s.Store.SetRunOutcome(run.RunID, "failure"); err != nil {
+		return false, err
+	}
+	return true, s.Store.SetRunStatus(run.RunID, sweepstate.RunNeedsTeardown)
 }
 
 func (s *Scheduler) reconcileNeedsResultsPull(ctx context.Context, sweepID string, run *sweepstate.Run, opts Options) (bool, error) {

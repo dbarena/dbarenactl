@@ -929,40 +929,131 @@ func TestStep_TeardownFailure_StopsTheWorld(t *testing.T) {
 	}
 }
 
-func TestStep_StaleHeartbeat_WarnsButDoesNotTearDown(t *testing.T) {
-	s, fb, st := newTestScheduler(t)
-	seedSweepWithOneTestPoint(t, st, 1, 1)
-	frozen := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
-	s.Now = func() time.Time { return frozen }
-	var out strings.Builder
-	s.Out = &out
-	opts := defaultOpts()
-	ctx := context.Background()
-
-	if _, err := step(s, ctx, "sweep-1", opts); err != nil {
+// staleRun drives a sweep to one launched run and backdates its heartbeat past
+// StaleThreshold, which is the state every test below starts from.
+func staleRun(t *testing.T, s *Scheduler, fb *fakeBench, opts Options, frozen time.Time) string {
+	t.Helper()
+	if _, err := step(s, context.Background(), "sweep-1", opts); err != nil {
 		t.Fatal(err)
 	}
 	runID := fb.launchCalls[0]
 	stale := frozen.Add(-20 * time.Minute)
 	fb.run(runID).state.Phases[bench.PhaseWorkloadExecute] = "running"
 	fb.run(runID).state.LastHeartbeat = &stale
+	return runID
+}
+
+func TestStep_StaleHeartbeat_FetchesDiagnosticsThenTearsDown(t *testing.T) {
+	s, fb, st := newTestScheduler(t)
+	seedSweepWithOneTestPoint(t, st, 1, 2)
+	frozen := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	s.Now = func() time.Time { return frozen }
+	opts := defaultOpts()
+	ctx := context.Background()
+	runID := staleRun(t, s, fb, opts, frozen)
 
 	res, err := step(s, ctx, "sweep-1", opts)
 	if err != nil {
 		t.Fatalf("Step: %v", err)
 	}
-	if len(fb.teardownCalls) != 0 {
-		t.Error("a stale heartbeat must never trigger an automatic teardown")
+	if !res.Progressed {
+		t.Error("failing a stale run is progress")
 	}
-	if res.Progressed {
-		t.Error("a stale warning alone is not progress")
-	}
-	if !strings.Contains(out.String(), "stale") {
-		t.Errorf("expected a stale warning in output, got: %s", out.String())
+	if len(fb.fetchCalls) != 1 || fb.fetchCalls[0] != runID {
+		t.Errorf("expected a best-effort diagnostics fetch, got %v", fb.fetchCalls)
 	}
 	run, _ := st.GetRun(runID)
-	if run.Status != sweepstate.RunWaitingRemote {
-		t.Errorf("run.Status = %q, should remain waiting_remote", run.Status)
+	if run.Status != sweepstate.RunNeedsTeardown {
+		t.Errorf("run.Status = %q, want %q", run.Status, sweepstate.RunNeedsTeardown)
+	}
+	if run.Outcome != "failure" {
+		t.Errorf("run.Outcome = %q, want failure", run.Outcome)
+	}
+	// Recorded so the partial artifacts can be found, but "failure" keeps them
+	// out of the results (see cmd/dbarenactl/results.go).
+	if run.LocalArtifactDir == "" {
+		t.Error("a successful diagnostics fetch should record its artifact dir")
+	}
+
+	// The next pass runs the teardown and charges the failure budget.
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil {
+		t.Fatalf("teardown step: %v", err)
+	}
+	if len(fb.teardownCalls) != 1 || fb.teardownCalls[0] != runID {
+		t.Errorf("teardownCalls = %v, want exactly %s", fb.teardownCalls, runID)
+	}
+	run, _ = st.GetRun(runID)
+	if run.Status != sweepstate.RunFailed {
+		t.Errorf("run.Status = %q, want %q", run.Status, sweepstate.RunFailed)
+	}
+	tp, _ := st.GetTestPoint(run.TestPointID)
+	if tp.FailuresCount != 1 {
+		t.Errorf("tp.FailuresCount = %d, want 1", tp.FailuresCount)
+	}
+}
+
+// The ordinary dead-driver case: the instance is gone, so the diagnostics fetch
+// cannot work. That must not stop the sweep -- the whole point of failing a
+// stale run is that the sweep keeps making progress.
+func TestStep_StaleHeartbeat_FetchFailureStillTearsDown(t *testing.T) {
+	s, fb, st := newTestScheduler(t)
+	seedSweepWithOneTestPoint(t, st, 1, 2)
+	frozen := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	s.Now = func() time.Time { return frozen }
+	opts := defaultOpts()
+	ctx := context.Background()
+	runID := staleRun(t, s, fb, opts, frozen)
+	fb.run(runID).fetchErr = errors.New("ssh: connect to host 1.2.3.4 port 22: No route to host")
+
+	res, err := step(s, ctx, "sweep-1", opts)
+	if err != nil {
+		t.Fatalf("Step: %v", err)
+	}
+	if !res.Progressed {
+		t.Error("failing a stale run is progress even when diagnostics are lost")
+	}
+	run, _ := st.GetRun(runID)
+	if run.Status != sweepstate.RunNeedsTeardown {
+		t.Errorf("run.Status = %q, want %q", run.Status, sweepstate.RunNeedsTeardown)
+	}
+	if run.Outcome != "failure" {
+		t.Errorf("run.Outcome = %q, want failure", run.Outcome)
+	}
+	if run.LocalArtifactDir != "" {
+		t.Errorf("a failed fetch must not record an artifact dir, got %q", run.LocalArtifactDir)
+	}
+	sw, _ := st.GetSweep("sweep-1")
+	if sw.HasError() {
+		t.Errorf("a failed diagnostics fetch must not stop the sweep, got action %q", sw.ErrorAction)
+	}
+}
+
+// A stale run whose environment is already gone must take the
+// TerminatedWithoutCompleting path: tearing down torn-down infrastructure would
+// fail, and a teardown failure stops the whole sweep.
+func TestStep_StaleHeartbeat_AlreadyTerminated_SkipsTeardown(t *testing.T) {
+	s, fb, st := newTestScheduler(t)
+	seedSweepWithOneTestPoint(t, st, 1, 2)
+	frozen := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	s.Now = func() time.Time { return frozen }
+	opts := defaultOpts()
+	ctx := context.Background()
+	runID := staleRun(t, s, fb, opts, frozen)
+	terminated := frozen.Add(-5 * time.Minute)
+	fb.run(runID).state.TerminatedAt = &terminated
+
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil {
+		t.Fatalf("Step: %v", err)
+	}
+	if len(fb.teardownCalls) != 0 {
+		t.Errorf("must not tear down an already-terminated environment, got %v", fb.teardownCalls)
+	}
+	if len(fb.fetchCalls) != 0 {
+		t.Errorf("must not fetch from an already-terminated environment, got %v", fb.fetchCalls)
+	}
+	run, _ := st.GetRun(runID)
+	if run.Status != sweepstate.RunFailed {
+		t.Errorf("run.Status = %q, want %q", run.Status, sweepstate.RunFailed)
 	}
 }
 

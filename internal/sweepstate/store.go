@@ -520,6 +520,34 @@ func (s *Store) ListNonTerminalRuns(sweepID string) ([]*Run, error) {
 	return out, rows.Err()
 }
 
+// ListRunsForSweep returns every run (including terminal, non-terminal,
+// orphaned, and failed ones) across all of the sweep's test points, ordered
+// by created_at. Used to compute per-test-point run durations for status's
+// ETA estimate, avoiding an N+1 query per test point.
+func (s *Store) ListRunsForSweep(sweepID string) ([]*Run, error) {
+	rows, err := s.db.Query(
+		`SELECT r.run_id, r.test_point_id, r.iteration_attempt, r.status, r.outcome, r.local_artifact_dir, r.fetch_attempts, r.created_at, r.updated_at
+		 FROM runs r JOIN test_points tp ON tp.id = r.test_point_id
+		 WHERE tp.sweep_id = ?
+		 ORDER BY r.created_at`,
+		sweepID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("sweepstate: list runs for sweep %s: %w", sweepID, err)
+	}
+	defer rows.Close()
+
+	var out []*Run
+	for rows.Next() {
+		run, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, run)
+	}
+	return out, rows.Err()
+}
+
 // ListRunsForTestPoint returns every run (including non-terminal, orphaned,
 // and failed ones) for a single test point, ordered by iteration attempt.
 // Unlike ListNonTerminalRuns, this includes terminal runs -- callers wanting

@@ -236,24 +236,29 @@ func listIncompleteSweeps(store *sweepstate.Store) error {
 		fmt.Println("no incomplete sweeps")
 		return nil
 	}
-	return printSweepList(sweeps)
+	return printSweepList(store, sweeps)
 }
 
-// printSweepList renders one row per sweep (id, provider, product, plan,
-// workload, status, and when it was last started -- initial run or most
-// recent resume, whichever is later), most recently started first (see
-// Store.ListIncompleteSweeps/ListAllSweeps). Shared by `resume`'s
-// incomplete-only list and `status --all`'s full list.
-func printSweepList(sweeps []*sweepstate.Sweep) error {
+// printSweepList renders one row per sweep, most recently
+// started first (see Store.ListIncompleteSweeps/ListAllSweeps).
+func printSweepList(store *sweepstate.Store, sweeps []*sweepstate.Sweep) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "STARTED\tSWEEP\tPROVIDER\tPRODUCT\tPLAN\tWORKLOAD\tSTATUS")
+	fmt.Fprintln(w, "STARTED\tSWEEP\tPROVIDER\tPRODUCT\tPLAN\tWORKLOAD\tSTATUS\tPROGRESS\tETA")
 	for _, sw := range sweeps {
 		status := string(sw.Status)
 		if sw.HasError() {
 			status = fmt.Sprintf("stopped (%s: %s)", sw.ErrorAction, sw.ErrorDetail)
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", sw.LastStartedAt.Local().Format("2006-01-02 15:04"),
-			sw.ID, sw.Provider, sw.Product, dashIfEmpty(sw.Plan), sw.Workload, status)
+		p, err := computeProgress(store, sw)
+		if err != nil {
+			return err
+		}
+		eta := "-"
+		if p.HasETA {
+			eta = formatDuration(p.ETA)
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d/%d\t%s\n", sw.LastStartedAt.Local().Format("2006-01-02 15:04"),
+			sw.ID, sw.Provider, sw.Product, dashIfEmpty(sw.Plan), sw.Workload, status, p.Done, p.Total, eta)
 	}
 	return w.Flush()
 }

@@ -78,6 +78,14 @@ type TestPoint struct {
 // number of successful iterations.
 func (tp *TestPoint) Satisfied() bool { return tp.SuccessesCount >= tp.SuccessesNeeded }
 
+// Label renders a short test point id: tier/bound-type[/variant].
+func (tp *TestPoint) Label() string {
+	if tp.Variant == "" {
+		return tp.Tier + "/" + tp.BoundType
+	}
+	return tp.Tier + "/" + tp.BoundType + "/" + tp.Variant
+}
+
 // BudgetExhausted reports whether this test point has used up its failure
 // budget without reaching Satisfied -- a terminal give-up state that
 // requires manual intervention (adjust the manifest/budget and start a new

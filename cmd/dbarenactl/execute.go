@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/dbarena/dbarenactl/internal/bench"
 	"github.com/dbarena/dbarenactl/internal/lock"
 	"github.com/dbarena/dbarenactl/internal/scheduler"
@@ -74,6 +76,29 @@ func printFreshRestartNotice(sweepID string) {
 	fmt.Fprintln(os.Stderr, msg+").")
 }
 
+// printSweepStoppedNotice reports why RunSweep stopped and what to do next.
+// When runErr traces back to a *bench.RunError (a launch/fetch/teardown
+// failure), it prints the action, run id, and log path as short, labeled
+// fields instead of re-serializing the error's full "bench: <action> <runID>:
+// ...(see ... for full output)" text, which the caller (executeSweep) or the
+// run's own progress line has already printed once already. Anything else
+// (e.g. a local store error) falls back to printing runErr as-is, since
+// there's no structured detail to pull out.
+func printSweepStoppedNotice(w io.Writer, sweepID string, runErr error) {
+	var re *bench.RunError
+	if errors.As(runErr, &re) {
+		fmt.Fprintf(w, "Sweep %s stopped: %s failed (%v)\n", sweepID, re.Action, re.Err)
+		fmt.Fprintf(w, "  Run:    %s\n", re.RunID)
+		if re.LogPath != "" {
+			fmt.Fprintf(w, "  Log:    %s\n", re.LogPath)
+		}
+		fmt.Fprintf(w, "  Resume: dbarenactl resume %s\n", sweepID)
+		return
+	}
+	fmt.Fprintf(w, "Sweep %s stopped: %v\n", sweepID, runErr)
+	fmt.Fprintf(w, "Once resolved, run `dbarenactl resume %s` to continue from exactly this point.\n", sweepID)
+}
+
 // printBudgetExhaustedDiagnostic reports which test point stopped the sweep
 // and where its failed runs' logs live, so the user can actually root-cause
 // it instead of being told to "accept the shortfall" with no next step.
@@ -116,7 +141,7 @@ func printBudgetExhaustedDiagnostic(w io.Writer, store *sweepstate.Store, sweepI
 // part of its identity (see internal/sweepid). `run`'s call sites always
 // pass 0 (no override): changing an existing sweep's concurrency is
 // `resume`'s job.
-func executeSweep(ctx context.Context, store *sweepstate.Store, sweepID, benchctlBin string, concurrencyOverride int) error {
+func executeSweep(cmd *cobra.Command, store *sweepstate.Store, sweepID, benchctlBin string, concurrencyOverride int) error {
 	sweep, err := store.GetSweep(sweepID)
 	if err != nil {
 		return err
@@ -172,7 +197,7 @@ func executeSweep(ctx context.Context, store *sweepstate.Store, sweepID, benchct
 		PollInterval:    pollInterval(),
 	}
 
-	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	fmt.Fprintf(os.Stderr, "==> Sweep %s: running (provider=%s, product=%s, plan=%s, workload=%s, max-concurrency=%d)\n",
@@ -190,11 +215,12 @@ func executeSweep(ctx context.Context, store *sweepstate.Store, sweepID, benchct
 					return err
 				}
 				fmt.Fprintf(os.Stderr, "Once resolved, run `dbarenactl resume %s` to continue from this point.\n", sweepID)
+				cmd.SilenceErrors = true
 				return runErr
 			}
 		}
-		fmt.Fprintf(os.Stderr, "Sweep %s stopped: %v\n", sweepID, runErr)
-		fmt.Fprintf(os.Stderr, "Once resolved, run `dbarenactl resume %s` to continue from exactly this point.\n", sweepID)
+		printSweepStoppedNotice(os.Stderr, sweepID, runErr)
+		cmd.SilenceErrors = true
 		return runErr
 	}
 	fmt.Fprintf(os.Stderr, "==> Sweep %s complete.\n", sweepID)

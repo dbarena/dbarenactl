@@ -292,7 +292,7 @@ func (s *Scheduler) Step(ctx context.Context, sweepID string, opts Options) (Ste
 		if rerr := s.Store.RecordError(sweepID, ActionLaunch, f.runID, f.err.Error()); rerr != nil {
 			return StepResult{}, rerr
 		}
-		return StepResult{}, fmt.Errorf("launch %s: %w", f.runID, f.err)
+		return StepResult{}, f.err
 	}
 
 	sweep, err := s.Store.GetSweep(sweepID)
@@ -696,7 +696,7 @@ func (s *Scheduler) launchAsync(ctx context.Context, tp *sweepstate.TestPoint, a
 	s.launching[runID] = struct{}{}
 	s.mu.Unlock()
 
-	s.logf("launching %s (run %s, attempt %d)", tp.ID, runID, attempt)
+	s.logf("launching %s (run %s, attempt %d)", tp.Label(), runID, attempt)
 	start := s.now()
 	s.wg.Add(1)
 	go func() {
@@ -718,12 +718,31 @@ func (s *Scheduler) launchAsync(ctx context.Context, tp *sweepstate.TestPoint, a
 		// The run row stays at RunLaunching on failure, which is exactly
 		// what reconcileLaunching's orphan detection expects to find.
 		if err != nil {
-			s.markf("✗", "%s: launch failed after %s: %v", runID, s.now().Sub(start).Round(time.Second), err)
+			s.markf("✗", "%s (run %s, attempt %d): launch failed after %s: %s",
+				tp.Label(), runID, attempt, s.now().Sub(start).Round(time.Second), launchFailureDetail(err))
 			return
 		}
-		s.markf("✓", "%s: provisioned in %s, workload running remotely", runID, s.now().Sub(start).Round(time.Second))
+		s.markf("✓", "%s (run %s, attempt %d): provisioned in %s, workload running remotely",
+			tp.Label(), runID, attempt, s.now().Sub(start).Round(time.Second))
 	}()
 	return nil
+}
+
+// launchFailureDetail renders a launch error's cause and (if known) log
+// path without re-serializing its full "bench: launch <runID>: ..." prefix
+// -- the run id and "launch" are already stated on the same progress line,
+// so repeating them here would be the same information twice in one
+// sentence. Falls back to err.Error() for anything that isn't a
+// *bench.RunError (e.g. a fake Runner in tests, or ctx cancellation).
+func launchFailureDetail(err error) string {
+	var re *bench.RunError
+	if errors.As(err, &re) {
+		if re.LogPath != "" {
+			return fmt.Sprintf("%v (see %s for full output)", re.Err, re.LogPath)
+		}
+		return re.Err.Error()
+	}
+	return err.Error()
 }
 
 // RestartExhaustedSweep discards a budget-exhausted sweep's entire progress

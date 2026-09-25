@@ -135,10 +135,7 @@ func printTestPointTable(w io.Writer, testPoints []*sweepstate.TestPoint) error 
 }
 
 func testPointLabel(tp *sweepstate.TestPoint) string {
-	if tp.Variant == "" {
-		return tp.Tier + "/" + tp.BoundType
-	}
-	return tp.Tier + "/" + tp.BoundType + "/" + tp.Variant
+	return tp.Label()
 }
 
 // progress tracks a sweep's completed-vs-total successful run count (e.g. 10

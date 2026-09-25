@@ -219,10 +219,10 @@ func TestStep_LogsLaunchFinishAndTeardownProgress(t *testing.T) {
 		t.Fatalf("launch step: %v", err)
 	}
 	runID := fb.launchCalls[0]
-	if !strings.Contains(out.String(), "launching sweep-1-small-io") {
+	if !strings.Contains(out.String(), "launching small/io (run "+runID) {
 		t.Errorf("output missing launch line: %q", out.String())
 	}
-	if !strings.Contains(out.String(), runID+": provisioned") {
+	if !strings.Contains(out.String(), "(run "+runID) || !strings.Contains(out.String(), "): provisioned") {
 		t.Errorf("output missing provisioned line: %q", out.String())
 	}
 

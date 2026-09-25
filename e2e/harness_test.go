@@ -88,6 +88,7 @@ type behavior struct {
 	LaunchFails      bool   `json:"launch_fails,omitempty"`
 	FetchFails       bool   `json:"fetch_fails,omitempty"`
 	TeardownFails    bool   `json:"teardown_fails,omitempty"`
+	StaleHeartbeat   bool   `json:"stale_heartbeat,omitempty"`
 }
 
 type fakeConfig struct {

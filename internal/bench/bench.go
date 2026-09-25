@@ -109,10 +109,10 @@ func (s *RunState) HandedOff() bool {
 const HandoffGracePeriod = 5 * time.Minute
 
 // StaleThreshold mirrors benchctl's own staleThreshold for workload.execute
-// heartbeats (cmd/benchctl/status.go). Used only to decide when to surface a
-// warning -- dbarenactl never auto-tears-down on this signal alone (see the
-// design plan: a stale heartbeat can mean a dead benchmark, or a live one
-// whose driver-side store token expired).
+// heartbeats (cmd/benchctl/status.go). Crossing it fails the run and tears its
+// environment down (see scheduler.failStaleRun), so keep the two in step
+// deliberately: unlike benchctl, where the threshold only drives a [stale]
+// badge, here it drives a destructive action.
 const StaleThreshold = 10 * time.Minute
 
 // Stale reports whether a still-executing run's heartbeat is old enough to

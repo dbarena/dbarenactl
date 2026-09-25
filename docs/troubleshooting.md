@@ -94,14 +94,43 @@ will stay up and running.
 If the environment is still there and you don't want to wait for a
 resume, tear it down manually with `benchctl teardown <run-id>`.
 
+## When a run stops reporting
+
+**Situation**: a run's heartbeat is more than 10 minutes old while its workload is still
+executing. `dbarenactl` logs a line like:
+
+```
+✗ <run-id>: no heartbeat for over 10m0s -- finalizing as failed and tearing down
+```
+
+There are two different causes that `dbarenactl` cannot tell apart. In the more likely case
+the `benchctl` process on the load driver died and the run is truly stuck. When a remote
+state store is configured (not the case by default) it is possible that `benchctl` is
+unable to update the state store because its access token expired. In any case `dbarenactl`
+fails the run and tears its environment down.
+
+**How to resolve**: usually there is no action required. If this keeps happening this might
+be a bug in `benchctl`. Check the log file that `dbarenactl` has fetched before teardown
+(see below). If you do use a remote state store, use a [service role key](https://github.com/dbarena/benchctl/blob/main/docs/state-store.md#ci-and-admins-service-role-key).
+
+**Where to look**: `dbarenactl` fetches whatever it can from the driver before tearing it
+down, so the driver's `resume.log` and any partial result files are usually under the run's
+artifact directory. They are kept for diagnosis only and are excluded from the sweep's
+results, since a partial benchmark is not a measurement.
+
+**How to identify dangling infrastructure**: none is expected, since `dbarenactl` tears the
+environment down itself. If that teardown fails, the sweep stops and the previous section
+applies.
+
 ## What dbarenactl can't detect
 
-If the remote benchmark infrastructure dies without `benchctl` reporting it as a failure,
-`dbarenactl` cannot notice on its own and it never tears down any infrastructure. This 
-is relevant on resume: choosing "continue" never touches a run that's already being
-tracked as in progress, since the whole point is to leave ongoing work alone. If you 
-suspect this has happened, check the run directly with `benchctl status <run-id>` or
-`benchctl connect <run-id> driver`.
+`dbarenactl` only notices a silent death while the workload is executing and has reported at
+least one heartbeat. Infrastructure that dies in any other phase, or before the first
+heartbeat, produces no signal at all: `benchctl` never reports a failure, so `dbarenactl`
+keeps waiting and never tears anything down. This is also relevant on resume: choosing
+"continue" never touches a run that's already being tracked as in progress, since the whole
+point is to leave ongoing work alone. If you suspect this has happened, check the run
+directly with `benchctl status <run-id>` or `benchctl connect <run-id> driver`.
 
 If a benchctl run is truly stuck, tear it down yourself with `benchctl teardown <run-id>`.
 `dbarenactl` periodically polls status and notices the environment is gone. It then

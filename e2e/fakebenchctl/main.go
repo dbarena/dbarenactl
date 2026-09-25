@@ -48,6 +48,11 @@ type Behavior struct {
 	FetchFails bool `json:"fetch_fails"`
 	// TeardownFails makes `teardown` fail every time.
 	TeardownFails bool `json:"teardown_fails"`
+	// StaleHeartbeat backdates the workload.execute heartbeat well past
+	// dbarenactl's StaleThreshold and never refreshes it, simulating a driver
+	// that stopped reporting -- either dead, or alive but unable to write to
+	// the store. The workload otherwise keeps "running" and never completes.
+	StaleHeartbeat bool `json:"stale_heartbeat"`
 }
 
 // Config is loaded from the file named by FAKEBENCH_CONFIG. TestPoints is
@@ -135,6 +140,24 @@ func behaviorFor(cfg *Config, runID string) Behavior {
 		}
 	}
 	return cfg.Default
+}
+
+// sleepWithHeartbeat waits for d while keeping the heartbeat fresh. dbarenactl
+// fails a run and tears its environment down once the heartbeat is older than
+// bench.StaleThreshold, so beating only at the start would make any fake
+// workload longer than that threshold die mid-test for the wrong reason.
+func sleepWithHeartbeat(d time.Duration, beat func()) {
+	const interval = 2 * time.Second
+	beat()
+	deadline := time.Now().Add(d)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return
+		}
+		time.Sleep(min(remaining, interval))
+		beat()
+	}
 }
 
 func durationOr(s string, def time.Duration) time.Duration {
@@ -321,8 +344,17 @@ func cmdWorker(args []string) {
 	setPhase("workload.prepare", "completed")
 
 	setPhase("workload.execute", "running")
-	heartbeat()
-	time.Sleep(durationOr(b.WorkloadDuration, 300*time.Millisecond))
+	if b.StaleHeartbeat {
+		// Backdated rather than simply absent: a nil heartbeat is never stale,
+		// so the run has to look like one that reported and then stopped.
+		stale := time.Now().UTC().Add(-time.Hour)
+		st.LastHeartbeat = &stale
+		if err := saveState(dir, st); err != nil {
+			logf(dir, runID, "worker: save state: %v", err)
+		}
+		return
+	}
+	sleepWithHeartbeat(durationOr(b.WorkloadDuration, 300*time.Millisecond), heartbeat)
 
 	if b.Outcome == "fail" {
 		setPhase("workload.execute", "failed")

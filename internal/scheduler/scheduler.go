@@ -569,7 +569,7 @@ func (s *Scheduler) reconcileWaitingRemote(ctx context.Context, sweepID string, 
 // failStaleRun finalizes a run that stopped reporting heartbeats. The signal is
 // ambiguous: the driver may be dead, or alive but unable to report after its
 // store token expired and dbarenactl cannot tell the two apart.
-// 
+//
 // Either way benchctl's view of the run is frozen, so it can never reach a
 // terminal state on its own. Therefore the run is terminated.
 func (s *Scheduler) failStaleRun(ctx context.Context, run *sweepstate.Run, opts Options) (bool, error) {

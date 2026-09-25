@@ -168,7 +168,7 @@ func runRun(cmd *cobra.Command, _ []string) error {
 		// lock is stale and reclaimable. Safe to just continue it, exactly
 		// as `dbarenactl resume` would.
 		printResumeNotice(existing)
-		return executeSweep(cmd.Context(), store, sweepID, runBenchctlBin, 0)
+		return executeSweep(cmd, store, sweepID, runBenchctlBin, 0)
 	case err == nil && existing.Status == sweepstate.SweepCompleted:
 		// Identical provider/workload/manifest/flags to a sweep that already
 		// finished -- e.g. re-running against a newly deployed version.
@@ -217,7 +217,7 @@ func runRun(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	return executeSweep(cmd.Context(), store, sweepID, runBenchctlBin, 0)
+	return executeSweep(cmd, store, sweepID, runBenchctlBin, 0)
 }
 
 func printDryRun(sweepID string, m *manifest.Manifest) error {

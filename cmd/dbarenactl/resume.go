@@ -67,7 +67,7 @@ func runResume(cmd *cobra.Command, args []string) error {
 		printResumeNotice(sweep)
 	}
 
-	return executeSweep(cmd.Context(), store, sweepID, resumeBenchctlBin, resumeMaxConcurrency)
+	return executeSweep(cmd, store, sweepID, resumeBenchctlBin, resumeMaxConcurrency)
 }
 
 // recoverBudgetExhausted presents the sweep's exact per-test-point state

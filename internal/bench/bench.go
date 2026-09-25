@@ -179,7 +179,7 @@ func (c *Client) LaunchAsync(ctx context.Context, runID, scenarioPath string, se
 	}
 	_, stderr, err := c.runLogged(ctx, runID, args...)
 	if err != nil {
-		return fmt.Errorf("bench: launch %s: %w%s", runID, err, c.errSuffix(runID, stderr))
+		return c.runError("launch", runID, err, stderr)
 	}
 	return nil
 }
@@ -205,7 +205,7 @@ func (c *Client) Status(ctx context.Context, runID string) (*RunState, error) {
 func (c *Client) Fetch(ctx context.Context, runID, localDest string) error {
 	_, stderr, err := c.runLogged(ctx, runID, "fetch", runID, "--dest", localDest)
 	if err != nil {
-		return fmt.Errorf("bench: fetch %s: %w%s", runID, err, c.errSuffix(runID, stderr))
+		return c.runError("fetch", runID, err, stderr)
 	}
 	return nil
 }
@@ -213,7 +213,7 @@ func (c *Client) Fetch(ctx context.Context, runID, localDest string) error {
 func (c *Client) Teardown(ctx context.Context, runID string) error {
 	_, stderr, err := c.runLogged(ctx, runID, "teardown", runID)
 	if err != nil {
-		return fmt.Errorf("bench: teardown %s: %w%s", runID, err, c.errSuffix(runID, stderr))
+		return c.runError("teardown", runID, err, stderr)
 	}
 	return nil
 }
@@ -250,6 +250,32 @@ func (c *Client) errSuffix(runID string, stderr []byte) string {
 		return fmt.Sprintf(" (see %s for full output)", c.logPath(runID))
 	}
 	return fmt.Sprintf(": %s", stderr)
+}
+
+// RunError is returned by LaunchAsync/Fetch/Teardown when the underlying
+// benchctl invocation fails. Its Error() text matches the plain
+// "bench: <action> <runID>: <err><suffix>" string but enables printing a short
+// summary instead of re-serializing everything.
+type RunError struct {
+	Action  string
+	RunID   string
+	Err     error
+	LogPath string
+	Suffix  string
+}
+
+func (e *RunError) Error() string {
+	return fmt.Sprintf("bench: %s %s: %v%s", e.Action, e.RunID, e.Err, e.Suffix)
+}
+
+func (e *RunError) Unwrap() error { return e.Err }
+
+func (c *Client) runError(action, runID string, err error, stderr []byte) error {
+	re := &RunError{Action: action, RunID: runID, Err: err, Suffix: c.errSuffix(runID, stderr)}
+	if c.LogDir != "" {
+		re.LogPath = c.logPath(runID)
+	}
+	return re
 }
 
 // runLogged behaves like run, but -- when LogDir is configured -- opens

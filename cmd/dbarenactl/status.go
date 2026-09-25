@@ -14,10 +14,7 @@ import (
 	"github.com/dbarena/dbarenactl/internal/sweepstate"
 )
 
-var (
-	statusBenchctlBin string
-	statusAll         bool
-)
+var statusAll bool
 
 var statusCmd = &cobra.Command{
 	Use:   "status [sweep-id]",
@@ -27,7 +24,6 @@ var statusCmd = &cobra.Command{
 }
 
 func init() {
-	statusCmd.Flags().StringVar(&statusBenchctlBin, "benchctl-bin", "benchctl", "Path to the benchctl binary")
 	statusCmd.Flags().BoolVar(&statusAll, "all", false, "Include completed sweeps in the list (only applies with no sweep-id given)")
 }
 
@@ -104,14 +100,9 @@ func runStatusCmd(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Println("\nActive runs:")
-	c := bench.New(statusBenchctlBin)
 	rw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(rw, "  RUN ID\tSTART\tDBARENA STATUS\tBENCHCTL PHASE\tETA")
+	fmt.Fprintln(rw, "  RUN ID\tSTART\tDBARENA STATUS\tETA")
 	for _, r := range runs {
-		phase := "-"
-		if rs, err := c.Status(cmd.Context(), r.RunID); err == nil {
-			phase = currentPhase(rs)
-		}
 		start := r.CreatedAt.Local().Format("2006-01-02 15:04")
 		eta := "-"
 		if avg, ok := avgDurations[r.TestPointID]; ok {
@@ -121,7 +112,7 @@ func runStatusCmd(cmd *cobra.Command, args []string) error {
 			}
 			eta = formatDuration(remaining)
 		}
-		fmt.Fprintf(rw, "  %s\t%s\t%s\t%s\t%s\n", r.RunID, start, r.Status, phase, eta)
+		fmt.Fprintf(rw, "  %s\t%s\t%s\t%s\n", r.RunID, start, r.Status, eta)
 	}
 	return rw.Flush()
 }

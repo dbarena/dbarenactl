@@ -654,16 +654,36 @@ func (s *Scheduler) reconcileNeedsResultsPull(ctx context.Context, sweepID strin
 }
 
 func (s *Scheduler) reconcileNeedsTeardown(ctx context.Context, sweepID string, run *sweepstate.Run) (bool, error) {
+	// Check first whether the environment is already gone -- e.g. someone
+	// tore it down by hand after a previous teardown attempt failed, per
+	// docs/troubleshooting.md's own advice. Skipping straight to Teardown in
+	// that case would just fail again (there's nothing left to destroy) and
+	// stop the sweep forever, since this run's status never changes on its
+	// own. Mirrors reconcileNeedsResultsPull's identical guard.
+	rs, statusErr := s.Bench.Status(ctx, run.RunID)
+	if errors.Is(statusErr, bench.ErrBenchctlUnusable) {
+		if rerr := s.Store.RecordError(sweepID, ActionStatus, run.RunID, statusErr.Error()); rerr != nil {
+			return false, rerr
+		}
+		return false, fmt.Errorf("check status of %s: %w", run.RunID, statusErr)
+	}
+	alreadyGone := errors.Is(statusErr, bench.ErrRunNotFound) || (statusErr == nil && rs.TerminatedAt != nil)
+	if statusErr != nil && !alreadyGone {
+		s.logf("warning: checking status of %s before teardown: %v", run.RunID, statusErr)
+	}
+
 	sp := s.spinner(fmt.Sprintf("%s: tearing down", run.RunID))
 	sp.Start()
 	start := time.Now()
 	defer func() { sp.Fail(s.stamp(fmt.Sprintf("%s: teardown did not finish", run.RunID))) }()
-	if err := s.Bench.Teardown(ctx, run.RunID); err != nil {
-		sp.Fail(s.stamp(fmt.Sprintf("%s: tear down failed: %v", run.RunID, err)))
-		if rerr := s.Store.RecordError(sweepID, ActionTeardown, run.RunID, err.Error()); rerr != nil {
-			return false, rerr
+	if !alreadyGone {
+		if err := s.Bench.Teardown(ctx, run.RunID); err != nil {
+			sp.Fail(s.stamp(fmt.Sprintf("%s: tear down failed: %v", run.RunID, err)))
+			if rerr := s.Store.RecordError(sweepID, ActionTeardown, run.RunID, err.Error()); rerr != nil {
+				return false, rerr
+			}
+			return false, fmt.Errorf("tear down %s: %w", run.RunID, err)
 		}
-		return false, fmt.Errorf("tear down %s: %w", run.RunID, err)
 	}
 	if err := s.Store.FinalizeRun(run.RunID, run.Outcome); err != nil {
 		sp.Fail(s.stamp(fmt.Sprintf("%s: torn down, but finalizing failed: %v", run.RunID, err)))
@@ -671,9 +691,12 @@ func (s *Scheduler) reconcileNeedsTeardown(ctx context.Context, sweepID string, 
 	}
 	elapsed := time.Since(start).Round(time.Second)
 	msg := fmt.Sprintf("%s: torn down in %s", run.RunID, elapsed)
+	if alreadyGone {
+		msg = fmt.Sprintf("%s: environment already gone -- nothing to tear down", run.RunID)
+	}
 	if tp, err := s.Store.GetTestPoint(run.TestPointID); err == nil {
-		msg = fmt.Sprintf("%s: torn down in %s -- %s now %d/%d successes, %d/%d failures",
-			run.RunID, elapsed, run.TestPointID, tp.SuccessesCount, tp.SuccessesNeeded, tp.FailuresCount, tp.FailureBudget)
+		msg = fmt.Sprintf("%s -- %s now %d/%d successes, %d/%d failures",
+			msg, run.TestPointID, tp.SuccessesCount, tp.SuccessesNeeded, tp.FailuresCount, tp.FailureBudget)
 	}
 	sp.Succeed(s.stamp(msg))
 	return true, nil

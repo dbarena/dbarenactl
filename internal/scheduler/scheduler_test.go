@@ -929,6 +929,99 @@ func TestStep_TeardownFailure_StopsTheWorld(t *testing.T) {
 	}
 }
 
+// A run that reached needs_teardown (results already pulled) but whose
+// environment vanished from benchctl's state store entirely -- e.g. someone
+// followed docs/troubleshooting.md's advice and ran `benchctl teardown
+// <run-id>` by hand after a previous teardown attempt failed -- must finalize
+// on its own instead of retrying a teardown that can only ever fail again.
+func TestStep_Teardown_RunVanished_FinalizesWithoutRetrying(t *testing.T) {
+	s, fb, st := newTestScheduler(t)
+	seedSweepWithOneTestPoint(t, st, 1, 1)
+	opts := defaultOpts()
+	ctx := context.Background()
+
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil {
+		t.Fatal(err)
+	}
+	runID := fb.launchCalls[0]
+	fb.complete(runID, true)
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil { // -> needs_results_pull
+		t.Fatal(err)
+	}
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil { // -> needs_teardown
+		t.Fatal(err)
+	}
+	fb.run(runID).notFound = true
+
+	res, err := step(s, ctx, "sweep-1", opts)
+	if err != nil {
+		t.Fatalf("Step: %v", err)
+	}
+	if !res.Progressed || !res.Done {
+		t.Errorf("res = %+v, want Progressed and Done", res)
+	}
+	if len(fb.teardownCalls) != 0 {
+		t.Errorf("must not attempt to tear down a run benchctl has no record of, got %v", fb.teardownCalls)
+	}
+	run, _ := st.GetRun(runID)
+	if run.Status != sweepstate.RunDone {
+		t.Errorf("run.Status = %q, want %q", run.Status, sweepstate.RunDone)
+	}
+	if run.Outcome != "success" {
+		t.Errorf("run.Outcome = %q, want success", run.Outcome)
+	}
+	sw, _ := st.GetSweep("sweep-1")
+	if sw.HasError() {
+		t.Errorf("a vanished-but-already-gone environment must not stop the sweep, got action %q", sw.ErrorAction)
+	}
+}
+
+// Same as above, but benchctl still has a record of the run and confirms via
+// TerminatedAt that the environment already came down, rather than having
+// lost the record entirely.
+func TestStep_Teardown_EnvironmentAlreadyTerminated_FinalizesWithoutRetrying(t *testing.T) {
+	s, fb, st := newTestScheduler(t)
+	seedSweepWithOneTestPoint(t, st, 1, 1)
+	opts := defaultOpts()
+	ctx := context.Background()
+
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil {
+		t.Fatal(err)
+	}
+	runID := fb.launchCalls[0]
+	fb.complete(runID, true)
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil { // -> needs_results_pull
+		t.Fatal(err)
+	}
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil { // -> needs_teardown
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	fb.run(runID).state.TerminatedAt = &now
+
+	res, err := step(s, ctx, "sweep-1", opts)
+	if err != nil {
+		t.Fatalf("Step: %v", err)
+	}
+	if !res.Progressed || !res.Done {
+		t.Errorf("res = %+v, want Progressed and Done", res)
+	}
+	if len(fb.teardownCalls) != 0 {
+		t.Errorf("must not tear down an already-terminated environment, got %v", fb.teardownCalls)
+	}
+	run, _ := st.GetRun(runID)
+	if run.Status != sweepstate.RunDone {
+		t.Errorf("run.Status = %q, want %q", run.Status, sweepstate.RunDone)
+	}
+	if run.Outcome != "success" {
+		t.Errorf("run.Outcome = %q, want success", run.Outcome)
+	}
+	sw, _ := st.GetSweep("sweep-1")
+	if sw.HasError() {
+		t.Errorf("an already-terminated environment must not stop the sweep, got action %q", sw.ErrorAction)
+	}
+}
+
 // staleRun drives a sweep to one launched run and backdates its heartbeat past
 // StaleThreshold, which is the state every test below starts from.
 func staleRun(t *testing.T, s *Scheduler, fb *fakeBench, opts Options, frozen time.Time) string {

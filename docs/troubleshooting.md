@@ -92,7 +92,9 @@ will stay up and running.
 
 **How to identify dangling infrastructure**: Check `benchctl status <run-id>` first.
 If the environment is still there and you don't want to wait for a
-resume, tear it down manually with `benchctl teardown <run-id>`.
+resume, tear it down manually with `benchctl teardown <run-id>`. `dbarenactl resume`
+notices the environment is already gone and finalizes the run itself, instead of
+retrying teardown against it.
 
 ## When a run stops reporting
 

@@ -704,12 +704,19 @@ func (s *Scheduler) reconcileNeedsTeardown(ctx context.Context, sweepID string, 
 
 // nextToLaunch picks the single test point to start an attempt for, or nil
 // if none can use one. Choosing the eligible test point with the fewest
-// attempts already in flight (ties broken by manifest order) spreads spare
-// capacity breadth-first across test points, and only stacks several
-// concurrent attempts on one test point once every other one already has all
-// the attempts it could use.
+// attempts started so far -- completed (success or failure) or still in
+// flight -- spreads attempts breadth-first across every test point in the
+// sweep, not just within one pass's concurrency budget: every test point
+// gets its first attempt before any gets a second, its second before any
+// gets a third, and so on. This holds even at max-concurrency 1, where at
+// most one attempt is ever in flight, because completed attempts count too.
+// Breadth-first matters here because the sweep's ETA (see cmd/dbarenactl
+// status.go) can't be computed until every remaining test point has at
+// least one completed run to estimate from -- finishing one test point
+// entirely before starting its neighbors would delay that indefinitely.
 func nextToLaunch(launchable []*sweepstate.TestPoint, pendingByTestPoint map[string]int) *sweepstate.TestPoint {
 	var best *sweepstate.TestPoint
+	var bestAttempts int
 	for _, tp := range launchable {
 		// A test point can run several attempts concurrently -- there's
 		// nothing shared between them, each provisions its own infra under a
@@ -719,8 +726,9 @@ func nextToLaunch(launchable []*sweepstate.TestPoint, pendingByTestPoint map[str
 		if tp.SuccessesNeeded-tp.SuccessesCount-pendingByTestPoint[tp.ID] <= 0 {
 			continue
 		}
-		if best == nil || pendingByTestPoint[tp.ID] < pendingByTestPoint[best.ID] {
-			best = tp
+		attempts := tp.SuccessesCount + tp.FailuresCount + pendingByTestPoint[tp.ID]
+		if best == nil || attempts < bestAttempts {
+			best, bestAttempts = tp, attempts
 		}
 	}
 	return best

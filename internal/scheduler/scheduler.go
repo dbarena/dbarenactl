@@ -229,6 +229,33 @@ func (s *Scheduler) markf(mark, format string, args ...any) {
 	fmt.Fprintln(s.writer(), mark+" "+s.stamp(fmt.Sprintf(format, args...)))
 }
 
+// runLabel renders run as its test point's short name plus which attempt
+// this is, e.g. "2xlarge/cache-fit/performance-optimized #2" -- what every
+// progress line is keyed by, in place of the run id it used to print. Falls
+// back to the run id if the test point can't be loaded: a line named a
+// little less readably beats no line at all.
+//
+// One indexed read of a local SQLite file per message is cheap enough not to
+// warrant caching, and the store is already used concurrently (see
+// launchAsync's goroutine).
+func (s *Scheduler) runLabel(run *sweepstate.Run) string {
+	tp, err := s.Store.GetTestPoint(run.TestPointID)
+	if err != nil {
+		return run.RunID
+	}
+	return tp.RunLabel(run.IterationAttempt)
+}
+
+// testPointLabel renders a test point id as its short tier/bound-type
+// [/variant] name, falling back to the id itself if it can't be loaded.
+func (s *Scheduler) testPointLabel(testPointID string) string {
+	tp, err := s.Store.GetTestPoint(testPointID)
+	if err != nil {
+		return testPointID
+	}
+	return tp.Label()
+}
+
 // spinner returns a Spinner for one fetch/teardown operation, writing
 // through the same Out as logf (so production gets a real animated spinner
 // on a terminal, and tests get the same plain start/end lines logf itself
@@ -291,7 +318,7 @@ func (s *Scheduler) Step(ctx context.Context, sweepID string, opts Options) (Ste
 	// observed a pass later. Recording it here rather than in the goroutine
 	// keeps sweep-level error state single-writer.
 	if f := s.takeLaunchFailure(); f != nil {
-		if rerr := s.Store.RecordError(sweepID, ActionLaunch, f.runID, f.err.Error()); rerr != nil {
+		if rerr := s.Store.RecordError(sweepID, ActionLaunch, f.runID, failureDetail(f.err)); rerr != nil {
 			return StepResult{}, rerr
 		}
 		return StepResult{}, f.err
@@ -302,7 +329,7 @@ func (s *Scheduler) Step(ctx context.Context, sweepID string, opts Options) (Ste
 		return StepResult{}, err
 	}
 	if sweep.ErrorAction == ActionBudgetExhausted {
-		return StepResult{}, budgetExhaustedError(sweep)
+		return StepResult{}, budgetExhaustedError(sweep, s.testPointLabel(sweep.ErrorTarget))
 	}
 	hadError := sweep.HasError()
 
@@ -369,7 +396,7 @@ func (s *Scheduler) Step(ctx context.Context, sweepID string, opts Options) (Ste
 		// Nothing wants a slot, a provision is already running, or the
 		// sweep is at capacity.
 	case draining:
-		s.logf("holding off on launching %s until every finished environment is torn down", next.ID)
+		s.logf("holding off on launching %s until every finished environment is torn down", next.Label())
 	default:
 		attempt := next.SuccessesCount + next.FailuresCount + pendingByTestPoint[next.ID] + 1
 		if err := s.launchAsync(ctx, next, attempt); err != nil {
@@ -381,12 +408,12 @@ func (s *Scheduler) Step(ctx context.Context, sweepID string, opts Options) (Ste
 
 	if exhausted != nil {
 		detail := fmt.Sprintf("test point %s exhausted its failure budget (%d/%d failures) without reaching %d successes",
-			exhausted.ID, exhausted.FailuresCount, exhausted.FailureBudget, exhausted.SuccessesNeeded)
+			exhausted.Label(), exhausted.FailuresCount, exhausted.FailureBudget, exhausted.SuccessesNeeded)
 		if err := s.Store.RecordError(sweepID, ActionBudgetExhausted, exhausted.ID, detail); err != nil {
 			return StepResult{}, err
 		}
 		sweep.ErrorAction, sweep.ErrorTarget, sweep.ErrorDetail = ActionBudgetExhausted, exhausted.ID, detail
-		return StepResult{}, budgetExhaustedError(sweep)
+		return StepResult{}, budgetExhaustedError(sweep, exhausted.Label())
 	}
 
 	if hadError {
@@ -413,8 +440,8 @@ func (s *Scheduler) Step(ctx context.Context, sweepID string, opts Options) (Ste
 	return StepResult{Progressed: progressed}, nil
 }
 
-func budgetExhaustedError(sweep *sweepstate.Sweep) error {
-	return fmt.Errorf("test point %s exhausted its failure budget -- see above for next steps, or run `dbarenactl resume %s` to inspect and decide", sweep.ErrorTarget, sweep.ID)
+func budgetExhaustedError(sweep *sweepstate.Sweep, label string) error {
+	return fmt.Errorf("test point %s exhausted its failure budget -- see above for next steps, or run `dbarenactl resume %s` to inspect and decide", label, sweep.ID)
 }
 
 func (s *Scheduler) reconcileRun(ctx context.Context, sweepID string, run *sweepstate.Run, opts Options) (bool, error) {
@@ -478,17 +505,18 @@ func (s *Scheduler) reconcileLaunching(ctx context.Context, sweepID string, run 
 		// Safe to discard outright; it never counted as a real attempt.
 		return true, s.Store.DeleteRun(run.RunID)
 	}
+	label := s.runLabel(run)
 	if errors.Is(err, bench.ErrBenchctlUnusable) {
-		if rerr := s.Store.RecordError(sweepID, ActionStatus, run.RunID, err.Error()); rerr != nil {
+		if rerr := s.Store.RecordError(sweepID, ActionStatus, run.RunID, failureDetail(err)); rerr != nil {
 			return false, rerr
 		}
-		return false, fmt.Errorf("check status of %s: %w", run.RunID, err)
+		return false, fmt.Errorf("check status of %s (run %s): %w", label, run.RunID, err)
 	}
 	if err != nil {
 		// A transient status-check problem (network, store auth) is not
 		// itself proof of anything about the run -- don't stop the world
 		// over it, just try again next pass.
-		s.logf("warning: checking status of %s: %v", run.RunID, err)
+		s.logf("warning: %s (run %s): checking status: %v", label, run.RunID, err)
 		return false, nil
 	}
 
@@ -504,56 +532,60 @@ func (s *Scheduler) reconcileLaunching(ctx context.Context, sweepID string, run 
 	// Orphaned: local provisioning either never finished or never got
 	// handed off in time. Infra may exist -- tear it down before discarding
 	// the row so a fresh attempt gets a clean slate.
-	sp := s.spinner(fmt.Sprintf("%s: launch left an orphaned environment; tearing down before retrying", run.RunID))
+	ref := fmt.Sprintf("%s (run %s)", label, run.RunID)
+	sp := s.spinner(fmt.Sprintf("%s: launch left an orphaned environment; tearing down before retrying", ref))
 	sp.Start()
 	start := time.Now()
-	defer func() { sp.Fail(s.stamp(fmt.Sprintf("%s: orphaned teardown did not finish", run.RunID))) }()
+	defer func() { sp.Fail(s.stamp(fmt.Sprintf("%s: orphaned teardown did not finish", ref))) }()
 	if err := s.Bench.Teardown(ctx, run.RunID); err != nil {
-		sp.Fail(s.stamp(fmt.Sprintf("%s: tear down orphaned environment failed: %v", run.RunID, err)))
-		if rerr := s.Store.RecordError(sweepID, ActionTeardown, run.RunID, err.Error()); rerr != nil {
+		sp.Fail(s.stamp(fmt.Sprintf("%s: tear down orphaned environment failed: %s", ref, failureDetail(err))))
+		if rerr := s.Store.RecordError(sweepID, ActionTeardown, run.RunID, failureDetail(err)); rerr != nil {
 			return false, rerr
 		}
-		return false, fmt.Errorf("tear down orphaned run %s: %w", run.RunID, err)
+		return false, fmt.Errorf("tear down orphaned run %s: %w", ref, err)
 	}
-	sp.Succeed(s.stamp(fmt.Sprintf("%s: orphaned environment torn down in %s", run.RunID, time.Since(start).Round(time.Second))))
+	sp.Succeed(s.stamp(fmt.Sprintf("%s: orphaned environment torn down in %s", ref, time.Since(start).Round(time.Second))))
 	return true, s.Store.DeleteRun(run.RunID)
 }
 
 func (s *Scheduler) reconcileWaitingRemote(ctx context.Context, sweepID string, run *sweepstate.Run, opts Options) (bool, error) {
 	rs, err := s.Bench.Status(ctx, run.RunID)
+	label := s.runLabel(run)
 	if errors.Is(err, bench.ErrBenchctlUnusable) {
-		if rerr := s.Store.RecordError(sweepID, ActionStatus, run.RunID, err.Error()); rerr != nil {
+		if rerr := s.Store.RecordError(sweepID, ActionStatus, run.RunID, failureDetail(err)); rerr != nil {
 			return false, rerr
 		}
-		return false, fmt.Errorf("check status of %s: %w", run.RunID, err)
+		return false, fmt.Errorf("check status of %s (run %s): %w", label, run.RunID, err)
 	}
 	if err != nil {
 		if errors.Is(err, bench.ErrRunNotFound) {
-			s.logf("warning: run %s vanished from benchctl's state store", run.RunID)
+			s.logf("warning: %s (run %s) vanished from benchctl's state store", label, run.RunID)
 		} else {
-			s.logf("warning: checking status of %s: %v", run.RunID, err)
+			s.logf("warning: %s (run %s): checking status: %v", label, run.RunID, err)
 		}
 		return false, nil
 	}
 
 	if rs.CompletedAt == nil {
 		if rs.TerminatedWithoutCompleting() {
-			s.markf("✗", "%s: environment terminated without the workload completing after %s -- finalizing as failed",
-				run.RunID, s.now().Sub(run.CreatedAt).Round(time.Second))
+			s.markf("✗", "%s (run %s): environment terminated without the workload completing after %s -- finalizing as failed",
+				label, run.RunID, s.now().Sub(run.CreatedAt).Round(time.Second))
 			return true, s.Store.FinalizeRun(run.RunID, "failure")
 		}
 		// Checked after TerminatedWithoutCompleting: if the environment is
 		// already gone, that branch finalizes without a teardown, and calling
 		// Teardown on torn-down infrastructure would stop the whole sweep.
 		if rs.Stale(s.now()) {
-			return s.failStaleRun(ctx, run, opts)
+			return s.failStaleRun(ctx, run, label, opts)
 		}
 		return false, nil
 	}
 
-	outcome, mark := "success", "✓"
+	// A failed workload is the one outcome the user may want to take to
+	// benchctl, so it names the run id; a success needs no follow-up.
+	outcome, mark, ref := "success", "✓", label
 	if rs.Error != "" {
-		outcome, mark = "failure", "✗"
+		outcome, mark, ref = "failure", "✗", fmt.Sprintf("%s (run %s)", label, run.RunID)
 	}
 	if err := s.Store.SetRunOutcome(run.RunID, outcome); err != nil {
 		return false, err
@@ -562,7 +594,7 @@ func (s *Scheduler) reconcileWaitingRemote(ctx context.Context, sweepID string, 
 	// (see launch()) -- the easiest available proxy for "since the
 	// environment was launched." Workloads run for hours to days, so
 	// rounding to the second is plenty accurate.
-	s.markf(mark, "%s: workload finished (%s) after %s", run.RunID, outcome, s.now().Sub(run.CreatedAt).Round(time.Second))
+	s.markf(mark, "%s: workload finished (%s) after %s", ref, outcome, s.now().Sub(run.CreatedAt).Round(time.Second))
 	return true, s.Store.SetRunStatus(run.RunID, sweepstate.RunNeedsResultsPull)
 }
 
@@ -572,9 +604,9 @@ func (s *Scheduler) reconcileWaitingRemote(ctx context.Context, sweepID string, 
 //
 // Either way benchctl's view of the run is frozen, so it can never reach a
 // terminal state on its own. Therefore the run is terminated.
-func (s *Scheduler) failStaleRun(ctx context.Context, run *sweepstate.Run, opts Options) (bool, error) {
-	s.markf("✗", "%s: no heartbeat for over %s -- finalizing as failed and tearing down",
-		run.RunID, bench.StaleThreshold)
+func (s *Scheduler) failStaleRun(ctx context.Context, run *sweepstate.Run, label string, opts Options) (bool, error) {
+	s.markf("✗", "%s (run %s): no heartbeat for over %s -- finalizing as failed and tearing down",
+		label, run.RunID, bench.StaleThreshold)
 
 	// Best effort: the driver's resume.log and any partial results are the only
 	// evidence of why it stopped reporting, and they die with the instance. A
@@ -582,7 +614,7 @@ func (s *Scheduler) failStaleRun(ctx context.Context, run *sweepstate.Run, opts 
 	// reconcileNeedsResultsPull's fetch it must never stop the sweep.
 	dest := filepath.Join(opts.ArtifactBaseDir, run.RunID)
 	if err := s.Bench.Fetch(ctx, run.RunID, dest); err != nil {
-		s.logf("%s: could not fetch diagnostics from the stale run: %v", run.RunID, err)
+		s.logf("%s (run %s): could not fetch diagnostics from the stale run: %s", label, run.RunID, failureDetail(err))
 	} else if err := s.Store.SetRunArtifactDir(run.RunID, dest); err != nil {
 		return false, err
 	}
@@ -600,28 +632,30 @@ func (s *Scheduler) failStaleRun(ctx context.Context, run *sweepstate.Run, opts 
 
 func (s *Scheduler) reconcileNeedsResultsPull(ctx context.Context, sweepID string, run *sweepstate.Run, opts Options) (bool, error) {
 	rs, statusErr := s.Bench.Status(ctx, run.RunID)
+	label := s.runLabel(run)
+	ref := fmt.Sprintf("%s (run %s)", label, run.RunID)
 	if errors.Is(statusErr, bench.ErrBenchctlUnusable) {
-		if rerr := s.Store.RecordError(sweepID, ActionStatus, run.RunID, statusErr.Error()); rerr != nil {
+		if rerr := s.Store.RecordError(sweepID, ActionStatus, run.RunID, failureDetail(statusErr)); rerr != nil {
 			return false, rerr
 		}
-		return false, fmt.Errorf("check status of %s: %w", run.RunID, statusErr)
+		return false, fmt.Errorf("check status of %s: %w", ref, statusErr)
 	}
 	if statusErr == nil && rs.TerminatedAt != nil {
 		// The environment came down (e.g. a manual `benchctl teardown` on a
 		// run stuck for good) before results were ever pulled -- no retry
 		// will succeed against infra that no longer exists.
-		s.logf("%s: environment already torn down -- results can no longer be fetched, finalizing as failed", run.RunID)
+		s.logf("%s: environment already torn down -- results can no longer be fetched, finalizing as failed", ref)
 		return true, s.Store.FinalizeRun(run.RunID, "failure")
 	}
 
 	dest := filepath.Join(opts.ArtifactBaseDir, run.RunID)
-	sp := s.spinner(fmt.Sprintf("%s: fetching results", run.RunID))
+	sp := s.spinner(fmt.Sprintf("%s: fetching results", label))
 	sp.Start()
 	start := time.Now()
-	defer func() { sp.Fail(s.stamp(fmt.Sprintf("%s: fetch did not finish", run.RunID))) }()
+	defer func() { sp.Fail(s.stamp(fmt.Sprintf("%s: fetch did not finish", ref))) }()
 	fetchErr := s.Bench.Fetch(ctx, run.RunID, dest)
 	if fetchErr == nil {
-		sp.Succeed(s.stamp(fmt.Sprintf("%s: results fetched in %s", run.RunID, time.Since(start).Round(time.Second))))
+		sp.Succeed(s.stamp(fmt.Sprintf("%s: results fetched in %s", label, time.Since(start).Round(time.Second))))
 		if err := s.Store.SetRunArtifactDir(run.RunID, dest); err != nil {
 			return false, err
 		}
@@ -629,24 +663,24 @@ func (s *Scheduler) reconcileNeedsResultsPull(ctx context.Context, sweepID strin
 	}
 
 	if errors.Is(fetchErr, bench.ErrBenchctlUnusable) {
-		sp.Fail(s.stamp(fmt.Sprintf("%s: fetch failed: %v", run.RunID, fetchErr)))
-		if rerr := s.Store.RecordError(sweepID, ActionFetch, run.RunID, fetchErr.Error()); rerr != nil {
+		sp.Fail(s.stamp(fmt.Sprintf("%s: fetch failed: %s", ref, failureDetail(fetchErr))))
+		if rerr := s.Store.RecordError(sweepID, ActionFetch, run.RunID, failureDetail(fetchErr)); rerr != nil {
 			return false, rerr
 		}
-		return false, fmt.Errorf("fetch %s: %w", run.RunID, fetchErr)
+		return false, fmt.Errorf("fetch %s: %w", ref, fetchErr)
 	}
 
 	n, err := s.Store.IncrementFetchAttempts(run.RunID)
 	if err != nil {
-		sp.Fail(s.stamp(fmt.Sprintf("%s: fetch failed: %v", run.RunID, fetchErr)))
+		sp.Fail(s.stamp(fmt.Sprintf("%s: fetch failed: %s", ref, failureDetail(fetchErr))))
 		return false, err
 	}
 	if n < opts.FetchRetryLimit {
-		sp.Fail(s.stamp(fmt.Sprintf("%s: fetch failed (attempt %d/%d), will retry: %v", run.RunID, n, opts.FetchRetryLimit, fetchErr)))
+		sp.Fail(s.stamp(fmt.Sprintf("%s: fetch failed (attempt %d/%d), will retry: %s", ref, n, opts.FetchRetryLimit, failureDetail(fetchErr))))
 		return false, nil
 	}
-	sp.Fail(s.stamp(fmt.Sprintf("%s: fetch failed permanently after %d attempts: %v", run.RunID, n, fetchErr)))
-	detail := fmt.Sprintf("results-pull failed %d times: %v", n, fetchErr)
+	sp.Fail(s.stamp(fmt.Sprintf("%s: fetch failed permanently after %d attempts: %s", ref, n, failureDetail(fetchErr))))
+	detail := fmt.Sprintf("results-pull failed %d times: %s", n, failureDetail(fetchErr))
 	if rerr := s.Store.RecordError(sweepID, ActionFetch, run.RunID, detail); rerr != nil {
 		return false, rerr
 	}
@@ -661,42 +695,45 @@ func (s *Scheduler) reconcileNeedsTeardown(ctx context.Context, sweepID string, 
 	// stop the sweep forever, since this run's status never changes on its
 	// own. Mirrors reconcileNeedsResultsPull's identical guard.
 	rs, statusErr := s.Bench.Status(ctx, run.RunID)
+	label := s.runLabel(run)
+	ref := fmt.Sprintf("%s (run %s)", label, run.RunID)
 	if errors.Is(statusErr, bench.ErrBenchctlUnusable) {
-		if rerr := s.Store.RecordError(sweepID, ActionStatus, run.RunID, statusErr.Error()); rerr != nil {
+		if rerr := s.Store.RecordError(sweepID, ActionStatus, run.RunID, failureDetail(statusErr)); rerr != nil {
 			return false, rerr
 		}
-		return false, fmt.Errorf("check status of %s: %w", run.RunID, statusErr)
+		return false, fmt.Errorf("check status of %s: %w", ref, statusErr)
 	}
 	alreadyGone := errors.Is(statusErr, bench.ErrRunNotFound) || (statusErr == nil && rs.TerminatedAt != nil)
 	if statusErr != nil && !alreadyGone {
-		s.logf("warning: checking status of %s before teardown: %v", run.RunID, statusErr)
+		s.logf("warning: %s: checking status before teardown: %v", ref, statusErr)
 	}
 
-	sp := s.spinner(fmt.Sprintf("%s: tearing down", run.RunID))
+	sp := s.spinner(fmt.Sprintf("%s: tearing down", label))
 	sp.Start()
 	start := time.Now()
-	defer func() { sp.Fail(s.stamp(fmt.Sprintf("%s: teardown did not finish", run.RunID))) }()
+	defer func() { sp.Fail(s.stamp(fmt.Sprintf("%s: teardown did not finish", ref))) }()
 	if !alreadyGone {
 		if err := s.Bench.Teardown(ctx, run.RunID); err != nil {
-			sp.Fail(s.stamp(fmt.Sprintf("%s: tear down failed: %v", run.RunID, err)))
-			if rerr := s.Store.RecordError(sweepID, ActionTeardown, run.RunID, err.Error()); rerr != nil {
+			sp.Fail(s.stamp(fmt.Sprintf("%s: tear down failed: %s", ref, failureDetail(err))))
+			if rerr := s.Store.RecordError(sweepID, ActionTeardown, run.RunID, failureDetail(err)); rerr != nil {
 				return false, rerr
 			}
-			return false, fmt.Errorf("tear down %s: %w", run.RunID, err)
+			return false, fmt.Errorf("tear down %s: %w", ref, err)
 		}
 	}
 	if err := s.Store.FinalizeRun(run.RunID, run.Outcome); err != nil {
-		sp.Fail(s.stamp(fmt.Sprintf("%s: torn down, but finalizing failed: %v", run.RunID, err)))
+		sp.Fail(s.stamp(fmt.Sprintf("%s: torn down, but finalizing failed: %v", ref, err)))
 		return false, err
 	}
 	elapsed := time.Since(start).Round(time.Second)
-	msg := fmt.Sprintf("%s: torn down in %s", run.RunID, elapsed)
+	msg := fmt.Sprintf("%s: torn down in %s", label, elapsed)
 	if alreadyGone {
-		msg = fmt.Sprintf("%s: environment already gone -- nothing to tear down", run.RunID)
+		msg = fmt.Sprintf("%s: environment already gone -- nothing to tear down", label)
 	}
+	// The label already names the test point, so the tally just says "now".
 	if tp, err := s.Store.GetTestPoint(run.TestPointID); err == nil {
-		msg = fmt.Sprintf("%s -- %s now %d/%d successes, %d/%d failures",
-			msg, run.TestPointID, tp.SuccessesCount, tp.SuccessesNeeded, tp.FailuresCount, tp.FailureBudget)
+		msg = fmt.Sprintf("%s -- now %d/%d successes, %d/%d failures",
+			msg, tp.SuccessesCount, tp.SuccessesNeeded, tp.FailuresCount, tp.FailureBudget)
 	}
 	sp.Succeed(s.stamp(msg))
 	return true, nil
@@ -762,7 +799,8 @@ func (s *Scheduler) launchAsync(ctx context.Context, tp *sweepstate.TestPoint, a
 	s.launching[runID] = struct{}{}
 	s.mu.Unlock()
 
-	s.logf("launching %s (run %s, attempt %d)", tp.Label(), runID, attempt)
+	label := tp.RunLabel(attempt)
+	s.logf("launching %s", label)
 	start := s.now()
 	s.wg.Add(1)
 	go func() {
@@ -784,23 +822,23 @@ func (s *Scheduler) launchAsync(ctx context.Context, tp *sweepstate.TestPoint, a
 		// The run row stays at RunLaunching on failure, which is exactly
 		// what reconcileLaunching's orphan detection expects to find.
 		if err != nil {
-			s.markf("✗", "%s (run %s, attempt %d): launch failed after %s: %s",
-				tp.Label(), runID, attempt, s.now().Sub(start).Round(time.Second), launchFailureDetail(err))
+			s.markf("✗", "%s (run %s): launch failed after %s: %s",
+				label, runID, s.now().Sub(start).Round(time.Second), failureDetail(err))
 			return
 		}
-		s.markf("✓", "%s (run %s, attempt %d): provisioned in %s, workload running remotely",
-			tp.Label(), runID, attempt, s.now().Sub(start).Round(time.Second))
+		s.markf("✓", "%s: provisioned in %s, workload running remotely",
+			label, s.now().Sub(start).Round(time.Second))
 	}()
 	return nil
 }
 
-// launchFailureDetail renders a launch error's cause and (if known) log
-// path without re-serializing its full "bench: launch <runID>: ..." prefix
-// -- the run id and "launch" are already stated on the same progress line,
-// so repeating them here would be the same information twice in one
-// sentence. Falls back to err.Error() for anything that isn't a
-// *bench.RunError (e.g. a fake Runner in tests, or ctx cancellation).
-func launchFailureDetail(err error) string {
+// failureDetail renders a benchctl error's cause and (if known) log path
+// without re-serializing its full "bench: <action> <runID>: ..." prefix --
+// every line that prints it already names the action and the run id, so
+// repeating them here would be the same information twice in one sentence.
+// Falls back to err.Error() for anything that isn't a *bench.RunError (e.g.
+// a fake Runner in tests, or ctx cancellation).
+func failureDetail(err error) string {
 	var re *bench.RunError
 	if errors.As(err, &re) {
 		if re.LogPath != "" {
@@ -835,7 +873,7 @@ func (s *Scheduler) RestartExhaustedSweep(ctx context.Context, sweepID string) e
 	}
 	for _, run := range runs {
 		if err := s.Bench.Teardown(ctx, run.RunID); err != nil {
-			if rerr := s.Store.RecordError(sweepID, ActionTeardown, run.RunID, err.Error()); rerr != nil {
+			if rerr := s.Store.RecordError(sweepID, ActionTeardown, run.RunID, failureDetail(err)); rerr != nil {
 				return rerr
 			}
 			return fmt.Errorf("tear down %s before restart: %w", run.RunID, err)

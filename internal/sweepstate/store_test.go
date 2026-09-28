@@ -911,3 +911,32 @@ func TestOpen_PersistsAcrossReopen(t *testing.T) {
 		t.Errorf("sw = %+v", sw)
 	}
 }
+
+func TestTestPoint_RunLabel(t *testing.T) {
+	tests := []struct {
+		name    string
+		tp      TestPoint
+		attempt int
+		want    string
+	}{
+		{
+			name:    "without variant",
+			tp:      TestPoint{Tier: "xlarge", BoundType: "cache-exceeding"},
+			attempt: 1,
+			want:    "xlarge/cache-exceeding #1",
+		},
+		{
+			name:    "with variant",
+			tp:      TestPoint{Tier: "4xlarge", BoundType: "cache-fit", Variant: "performance-optimized"},
+			attempt: 3,
+			want:    "4xlarge/cache-fit/performance-optimized #3",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.tp.RunLabel(tt.attempt); got != tt.want {
+				t.Errorf("RunLabel = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

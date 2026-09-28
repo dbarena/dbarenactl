@@ -18,6 +18,17 @@ comes up.
 Importantly, `dbarenactl` completely relies on `benchctl` for the low-level plumbing.
 If you're unsure about `dbarenactl` reporting, use `benchctl` directly to investigate.
 
+## Reading the output
+
+Progress lines name a test point and its attempt:
+
+```
+[2026-03-04T09:12:44Z] ✓ 2xlarge/cache-fit/performance-optimized #2: workload finished (success) after 3h12m
+```
+
+The name is `<tier>/<bound-type>[/<variant>] #<attempt>`, i.e. the same value
+`--test-point` takes, and the current iteration.
+
 ## When a sweep stops on its own
 
 A sweep can stop prematurely for several reasons. Below we discuss common situations,
@@ -102,7 +113,7 @@ retrying teardown against it.
 executing. `dbarenactl` logs a line like:
 
 ```
-✗ <run-id>: no heartbeat for over 10m0s -- finalizing as failed and tearing down
+✗ 2xlarge/cache-fit #3 (run <run-id>): no heartbeat for over 10m0s -- finalizing as failed and tearing down
 ```
 
 There are two different causes that `dbarenactl` cannot tell apart. In the more likely case
@@ -144,7 +155,8 @@ its slot for a fresh attempt.
 When a sweep has stopped and you want to be sure nothing was left behind:
 
 1. `dbarenactl status <sweep-id>` to see overall sweep status.
-2. For each active run listed, issue `benchctl status <run-id>` for details.
+2. For each active run listed, issue `benchctl status <run-id>` for details (use the
+   `RUN ID` column of the "Active runs" table).
 3. Manually tear down infrastructure with: `benchctl teardown <run-id>`.
 4. Consider the sweep's infrastructure town down only once every run it listed is 
    accounted for.

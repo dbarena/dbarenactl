@@ -219,10 +219,10 @@ func TestStep_LogsLaunchFinishAndTeardownProgress(t *testing.T) {
 		t.Fatalf("launch step: %v", err)
 	}
 	runID := fb.launchCalls[0]
-	if !strings.Contains(out.String(), "launching small/io (run "+runID) {
+	if !strings.Contains(out.String(), "launching small/io #1") {
 		t.Errorf("output missing launch line: %q", out.String())
 	}
-	if !strings.Contains(out.String(), "(run "+runID) || !strings.Contains(out.String(), "): provisioned") {
+	if !strings.Contains(out.String(), "small/io #1: provisioned") {
 		t.Errorf("output missing provisioned line: %q", out.String())
 	}
 
@@ -230,32 +230,74 @@ func TestStep_LogsLaunchFinishAndTeardownProgress(t *testing.T) {
 	if _, err := step(s, ctx, "sweep-1", opts); err != nil {
 		t.Fatalf("completion step: %v", err)
 	}
-	if !strings.Contains(out.String(), runID+": workload finished (success)") {
+	if !strings.Contains(out.String(), "small/io #1: workload finished (success)") {
 		t.Errorf("output missing finished line: %q", out.String())
 	}
 
 	if _, err := step(s, ctx, "sweep-1", opts); err != nil { // fetch
 		t.Fatalf("fetch step: %v", err)
 	}
-	if !strings.Contains(out.String(), runID+": fetching results") {
+	if !strings.Contains(out.String(), "small/io #1: fetching results") {
 		t.Errorf("output missing fetching line: %q", out.String())
 	}
 	if _, err := step(s, ctx, "sweep-1", opts); err != nil { // teardown + finalize
 		t.Fatalf("teardown step: %v", err)
 	}
-	tearingDownIdx := strings.Index(out.String(), runID+": tearing down")
-	tornDownIdx := strings.Index(out.String(), runID+": torn down in ")
+	tearingDownIdx := strings.Index(out.String(), "small/io #1: tearing down")
+	tornDownIdx := strings.Index(out.String(), "small/io #1: torn down in ")
 	if tearingDownIdx == -1 {
 		t.Errorf("output missing tearing-down line: %q", out.String())
 	}
 	if tornDownIdx == -1 {
 		t.Errorf("output missing teardown line: %q", out.String())
 	}
-	if !strings.Contains(out.String(), "-- sweep-1-small-io now 1/1 successes, 0/1 failures") {
+	if !strings.Contains(out.String(), "-- now 1/1 successes, 0/1 failures") {
 		t.Errorf("output missing test point tally: %q", out.String())
 	}
 	if tearingDownIdx != -1 && tornDownIdx != -1 && tearingDownIdx > tornDownIdx {
 		t.Errorf("expected \"tearing down\" to precede \"torn down\": %q", out.String())
+	}
+	// The point of the short labels: a sweep that goes well never makes the
+	// reader parse a run id. They come back only when something fails.
+	if strings.Contains(out.String(), runID) {
+		t.Errorf("run id %q leaked into a fully successful sweep's output: %q", runID, out.String())
+	}
+}
+
+func TestStep_FailurePathsNameTheRunID(t *testing.T) {
+	s, fb, st := newTestScheduler(t)
+	seedSweepWithOneTestPoint(t, st, 1, 1)
+	opts := defaultOpts()
+	ctx := context.Background()
+
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil {
+		t.Fatal(err)
+	}
+	runID := fb.launchCalls[0]
+	fb.complete(runID, true)
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil { // -> needs_results_pull
+		t.Fatal(err)
+	}
+	fb.run(runID).fetchFailCount = 999 // always fails
+
+	if _, err := step(s, ctx, "sweep-1", opts); err != nil { // one retry, under the limit
+		t.Fatal(err)
+	}
+
+	// A failure is exactly when the user needs the run id, to hand it to
+	// `benchctl status|connect|fetch` -- so it appears alongside the label
+	// rather than in place of it.
+	out := s.Out.(*strings.Builder).String()
+	if !strings.Contains(out, "small/io #1 (run "+runID+"): fetch failed (attempt 1/") {
+		t.Errorf("fetch-failure line should name both the label and the run id: %q", out)
+	}
+}
+
+func TestRunLabel_FallsBackToRunIDForAnUnknownTestPoint(t *testing.T) {
+	s, _, _ := newTestScheduler(t)
+	run := &sweepstate.Run{RunID: "sweep-1-small-io-1-deadbeef", TestPointID: "no-such-test-point", IterationAttempt: 1}
+	if got := s.runLabel(run); got != run.RunID {
+		t.Errorf("runLabel = %q, want the run id %q", got, run.RunID)
 	}
 }
 
@@ -430,10 +472,11 @@ func TestStep_ResumeAfterCrash_ProvisionNotCompleted_TearsDownAndRetries(t *test
 	}
 
 	out := s.Out.(*strings.Builder).String()
-	if !strings.Contains(out, orphanID+": launch left an orphaned environment; tearing down before retrying") {
+	ref := "small/io #1 (run " + orphanID + ")"
+	if !strings.Contains(out, ref+": launch left an orphaned environment; tearing down before retrying") {
 		t.Errorf("output missing orphan-teardown-starting line: %q", out)
 	}
-	if !strings.Contains(out, orphanID+": orphaned environment torn down") {
+	if !strings.Contains(out, ref+": orphaned environment torn down") {
 		t.Errorf("output missing orphan-teardown-finished line: %q", out)
 	}
 }
@@ -914,7 +957,7 @@ func TestStep_TeardownFailure_StopsTheWorld(t *testing.T) {
 	if sw.ErrorAction != ActionTeardown {
 		t.Errorf("sweep = %+v", sw)
 	}
-	if out := s.Out.(*strings.Builder).String(); !strings.Contains(out, runID+": tearing down") {
+	if out := s.Out.(*strings.Builder).String(); !strings.Contains(out, "small/io #1: tearing down") {
 		t.Errorf("output missing tearing-down line before the failed attempt: %q", out)
 	}
 

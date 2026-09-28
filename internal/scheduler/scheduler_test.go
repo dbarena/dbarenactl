@@ -1335,6 +1335,77 @@ func TestStep_StacksConcurrentAttemptsBreadthFirst(t *testing.T) {
 	}
 }
 
+// TestStep_BreadthFirstAcrossPasses verifies that breadth-first spreading
+// holds across scheduling passes and completions, not just within one pass's
+// concurrency budget. At max-concurrency 1 -- the production default -- only
+// one run is ever in flight, so the only way to see round-robin behavior is
+// by tracking attempts already completed, not just attempts in flight.
+func TestStep_BreadthFirstAcrossPasses(t *testing.T) {
+	s, fb, st := newTestScheduler(t)
+	sw := &sweepstate.Sweep{ID: "sweep-1", Provider: "AWS", ParamsJSON: "{}", CreatedAt: time.Now().UTC()}
+	if err := st.CreateSweep(sw); err != nil {
+		t.Fatal(err)
+	}
+	var tps []*sweepstate.TestPoint
+	for _, tier := range []string{"small", "medium", "large"} {
+		tps = append(tps, &sweepstate.TestPoint{
+			ID: "sweep-1-" + tier, SweepID: sw.ID, Tier: tier, Workload: "tpcc", Scenario: "x.yaml",
+			BoundType: "io", SuccessesNeeded: 2, FailureBudget: 1,
+		})
+	}
+	if err := st.CreateTestPoints(tps); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := defaultOpts()
+	opts.MaxConcurrency = 1
+	ctx := context.Background()
+
+	var order []string
+	for i := 0; i < 6; i++ {
+		if _, err := fill(t, s, fb, ctx, "sweep-1", opts); err != nil {
+			t.Fatal(err)
+		}
+		if len(fb.launchCalls) != i+1 {
+			t.Fatalf("after round %d: launchCalls = %v, want %d", i, fb.launchCalls, i+1)
+		}
+		runID := fb.launchCalls[i]
+		run, err := st.GetRun(runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		order = append(order, run.TestPointID)
+
+		fb.complete(runID, true)
+		if _, err := step(s, ctx, "sweep-1", opts); err != nil { // -> needs_results_pull
+			t.Fatal(err)
+		}
+		if _, err := step(s, ctx, "sweep-1", opts); err != nil { // -> needs_teardown
+			t.Fatal(err)
+		}
+		if _, err := step(s, ctx, "sweep-1", opts); err != nil { // finalize (+ next launch)
+			t.Fatal(err)
+		}
+	}
+
+	// Every test point must get its first attempt before any gets a second:
+	// the first 3 launches are 3 distinct test points, and the next 3 repeat
+	// them in the same order for their second attempt.
+	first := order[:3]
+	seen := map[string]bool{}
+	for _, id := range first {
+		if seen[id] {
+			t.Fatalf("order = %v: a test point got a second attempt before every test point had a first", order)
+		}
+		seen[id] = true
+	}
+	for i, id := range order[3:6] {
+		if id != first[i] {
+			t.Fatalf("order = %v: want second round to repeat first round's order", order)
+		}
+	}
+}
+
 func TestRunSweep_CompletesAndReturnsNil(t *testing.T) {
 	s, fb, st := newTestScheduler(t)
 	seedSweepWithOneTestPoint(t, st, 1, 1)

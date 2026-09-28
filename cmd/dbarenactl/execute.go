@@ -59,8 +59,30 @@ type sweepParams struct {
 // printResumeNotice reports why a sweep previously stopped, before
 // continuing it. Shared by `run` (when it finds an existing sweep stopped on
 // an error and continues it instead of erroring) and `resume`.
-func printResumeNotice(sweep *sweepstate.Sweep) {
-	fmt.Fprintf(os.Stderr, "Resuming from a %s failure on %s:\n  %s\n\n", sweep.ErrorAction, sweep.ErrorTarget, sweep.ErrorDetail)
+func printResumeNotice(store *sweepstate.Store, sweep *sweepstate.Sweep) {
+	fmt.Fprintf(os.Stderr, "Resuming from a %s failure on %s:\n  %s\n\n",
+		sweep.ErrorAction, errorTargetLabel(store, sweep.ErrorTarget), sweep.ErrorDetail)
+}
+
+// errorTargetLabel renders a sweep's ErrorTarget -- a test point id for a
+// launch failure, a run id for a fetch/teardown one (see
+// sweepstate.Sweep) -- as the short name progress output uses. A run keeps
+// its id alongside the label, since that's what gets handed to `benchctl
+// status|connect|teardown`. Falls back to the raw target, which is always
+// meaningful even if it is long.
+func errorTargetLabel(store *sweepstate.Store, target string) string {
+	if tp, err := store.GetTestPoint(target); err == nil {
+		return tp.Label()
+	}
+	run, err := store.GetRun(target)
+	if err != nil {
+		return target
+	}
+	tp, err := store.GetTestPoint(run.TestPointID)
+	if err != nil {
+		return target
+	}
+	return fmt.Sprintf("%s (run %s)", tp.RunLabel(run.IterationAttempt), target)
 }
 
 // printFreshRestartNotice reports that `run` found this exact sweep already
@@ -103,7 +125,7 @@ func printSweepStoppedNotice(w io.Writer, sweepID string, runErr error) {
 // and where its failed runs' logs live, so the user can actually root-cause
 // it instead of being told to "accept the shortfall" with no next step.
 func printBudgetExhaustedDiagnostic(w io.Writer, store *sweepstate.Store, sweepID string, tp *sweepstate.TestPoint) error {
-	fmt.Fprintf(w, "Sweep %s stopped as the test point %s exhausted its budget of %d failures.\n\n", sweepID, tp.ID, tp.FailureBudget)
+	fmt.Fprintf(w, "Sweep %s stopped as the test point %s exhausted its budget of %d failures.\n\n", sweepID, tp.Label(), tp.FailureBudget)
 
 	runs, err := store.ListRunsForTestPoint(tp.ID)
 	if err != nil {
@@ -202,6 +224,10 @@ func executeSweep(cmd *cobra.Command, store *sweepstate.Store, sweepID, benchctl
 
 	fmt.Fprintf(os.Stderr, "==> Sweep %s: running (provider=%s, product=%s, plan=%s, workload=%s, max-concurrency=%d)\n",
 		sweepID, params.Provider, params.Product, params.Plan, params.Workload, params.MaxConcurrency)
+	// Progress lines below name test points as tier/bound-type[/variant]
+	// #attempt rather than by run id, so point at where the run ids a
+	// benchctl command needs still live.
+	fmt.Fprintf(os.Stderr, "    Run ids for benchctl: dbarenactl status %s\n", sweepID)
 	runErr := sched.RunSweep(ctx, sweepID, opts)
 	if runErr != nil {
 		if errors.Is(runErr, context.Canceled) {

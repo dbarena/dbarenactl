@@ -64,7 +64,7 @@ func runResume(cmd *cobra.Command, args []string) error {
 			return err
 		}
 	} else if sweep.HasError() {
-		printResumeNotice(sweep)
+		printResumeNotice(store, sweep)
 	}
 
 	return executeSweep(cmd, store, sweepID, resumeBenchctlBin, resumeMaxConcurrency)
@@ -137,7 +137,7 @@ func recoverBudgetExhausted(cmd *cobra.Command, store *sweepstate.Store, sweep *
 				return err
 			}
 			fmt.Fprintf(os.Stderr, "Skipped test point %s. To run a new sweep for just this test point use `--test-point %s`.\n",
-				exhaustedTP.ID, testPointLabel(exhaustedTP))
+				testPointLabel(exhaustedTP), testPointLabel(exhaustedTP))
 		}
 	case recoveryRestart:
 		logDir, err := logsBaseDir(sweep.ID)
@@ -211,9 +211,9 @@ func promptRetryOrSkip(in io.Reader, out io.Writer, tp *sweepstate.TestPoint) (r
 	label := testPointLabel(tp)
 	for attempt := 0; attempt < 3; attempt++ {
 		fmt.Fprintf(out, "Keep retrying from %s [r], or skip it [s]? You can start a new sweep later for just this test point with `--test-point %s`. ",
-			tp.ID, label)
+			label, label)
 		if !scanner.Scan() {
-			fmt.Fprintf(out, "\nNo further input -- keeping %s and extending its failure budget. Run `dbarenactl resume %s` again from an interactive terminal to skip it instead.\n", tp.ID, tp.SweepID)
+			fmt.Fprintf(out, "\nNo further input -- keeping %s and extending its failure budget. Run `dbarenactl resume %s` again from an interactive terminal to skip it instead.\n", label, tp.SweepID)
 			return choiceRetry, nil
 		}
 		switch strings.ToLower(strings.TrimSpace(scanner.Text())) {

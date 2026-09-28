@@ -7,7 +7,10 @@
 // is the entire point of this package.
 package sweepstate
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // SweepStatus is the coarse lifecycle state of a sweep.
 type SweepStatus string
@@ -84,6 +87,17 @@ func (tp *TestPoint) Label() string {
 		return tp.Tier + "/" + tp.BoundType
 	}
 	return tp.Tier + "/" + tp.BoundType + "/" + tp.Variant
+}
+
+// RunLabel names one attempt against this test point, e.g.
+// "2xlarge/cache-fit/performance-optimized #2". It's the short, readable
+// counterpart to a benchctl run id: run ids are built by concatenating the
+// sweep id, this test point's slug, the attempt and a random suffix (see
+// internal/planner), which makes them unambiguous but unreadable at a
+// glance. Progress output uses this; anything a user has to hand back to
+// benchctl still names the run id.
+func (tp *TestPoint) RunLabel(attempt int) string {
+	return fmt.Sprintf("%s #%d", tp.Label(), attempt)
 }
 
 // BudgetExhausted reports whether this test point has used up its failure

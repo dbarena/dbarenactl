@@ -70,7 +70,8 @@ func runStatusCmd(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Workload: %s\n", sweep.Workload)
 	fmt.Printf("Status:   %s\n", sweep.Status)
 	if sweep.HasError() {
-		fmt.Printf("Stopped:  %s failed on %s\n          %s\n", sweep.ErrorAction, sweep.ErrorTarget, sweep.ErrorDetail)
+		fmt.Printf("Stopped:  %s failed on %s\n          %s\n",
+			sweep.ErrorAction, errorTargetLabel(store, sweep.ErrorTarget), sweep.ErrorDetail)
 	}
 
 	p, err := computeProgress(store, sweep)
@@ -99,9 +100,12 @@ func runStatusCmd(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// TEST POINT first, and paired with RUN ID: `run`'s progress output
+	// names runs by their short label only, so this table is where a label
+	// seen there is mapped back to the run id `benchctl` commands take.
 	fmt.Println("\nActive runs:")
 	rw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(rw, "  RUN ID\tSTART\tDBARENA STATUS\tETA")
+	fmt.Fprintln(rw, "  TEST POINT\tRUN ID\tSTART\tDBARENA STATUS\tETA")
 	for _, r := range runs {
 		start := r.CreatedAt.Local().Format("2006-01-02 15:04")
 		eta := "-"
@@ -112,7 +116,11 @@ func runStatusCmd(cmd *cobra.Command, args []string) error {
 			}
 			eta = formatDuration(remaining)
 		}
-		fmt.Fprintf(rw, "  %s\t%s\t%s\t%s\n", r.RunID, start, r.Status, eta)
+		label := "-"
+		if tp, err := store.GetTestPoint(r.TestPointID); err == nil {
+			label = tp.RunLabel(r.IterationAttempt)
+		}
+		fmt.Fprintf(rw, "  %s\t%s\t%s\t%s\t%s\n", label, r.RunID, start, r.Status, eta)
 	}
 	return rw.Flush()
 }

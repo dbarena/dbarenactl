@@ -185,6 +185,7 @@ func computeProgress(store *sweepstate.Store, sweep *sweepstate.Sweep) (progress
 	}
 
 	var remaining time.Duration
+	var maxInFlightRemaining time.Duration
 	for _, tp := range testPoints {
 		if tp.Skipped || tp.Satisfied() {
 			continue
@@ -200,9 +201,20 @@ func computeProgress(store *sweepstate.Store, sweep *sweepstate.Sweep) (progress
 
 		// Credit runs already in flight for this test point with the time
 		// they've already spent, capped at avg per run so an overrunning run
-		// can't push this test point's contribution negative.
+		// can't push this test point's contribution negative. Track each
+		// run's own remaining time (avg - elapsed, floored at 0) too: the
+		// sweep can't finish before its slowest in-flight run does, no
+		// matter how much concurrency is left to divide the rest of the
+		// work across.
 		var credit time.Duration
 		for _, elapsed := range inFlightElapsed[tp.ID] {
+			runRemaining := avg - elapsed
+			if runRemaining < 0 {
+				runRemaining = 0
+			}
+			if runRemaining > maxInFlightRemaining {
+				maxInFlightRemaining = runRemaining
+			}
 			if elapsed > avg {
 				elapsed = avg
 			}
@@ -223,6 +235,9 @@ func computeProgress(store *sweepstate.Store, sweep *sweepstate.Sweep) (progress
 	}
 
 	p.ETA = remaining / time.Duration(concurrency)
+	if maxInFlightRemaining > p.ETA {
+		p.ETA = maxInFlightRemaining
+	}
 	p.HasETA = true
 	return p, nil
 }

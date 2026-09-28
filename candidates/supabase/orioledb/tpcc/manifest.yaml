@@ -111,7 +111,7 @@ test_points:
       region: "us-east-1"
       project_size: xlarge
       warehouses: "64"
-      disk_size_gb: "20"
+      disk_size_gb: "24"
       disk_iops: "3000"
       disk_throughput_mibps: "125"
       prepare_threads: "8"

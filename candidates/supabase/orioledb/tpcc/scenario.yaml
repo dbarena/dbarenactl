@@ -84,7 +84,7 @@ target:
     # to allow specifying a release channel
     experimental: true
     release_channel: ""
-    postgres_engine: ""
+    postgres_engine: "17-oriole"
     high_availability: false
     connection_mode: direct
     profile: "{{ inputs.profile }}"

@@ -169,6 +169,31 @@ suite:
             name: db_size_before
             query: >-
               SELECT 'total_bytes=' || (pg_database_size(current_database()) + (SELECT COALESCE(sum(size), 0) FROM pg_ls_waldir()) + (SELECT COALESCE(sum(undo_size), 0) FROM orioledb_undo_size()))::bigint
+        - name: get-page-stats-before-benchmark
+          # OrioleDB's equivalent of the other candidates' cache hit ratio.
+          #
+          # The other scenarios read blks_hit/blks_read from pg_stat_database.
+          # That is useless here as OrioleDB tables use their own page pools
+          # and bypass shared_buffers, so pg_stat_database only ever sees
+          # catalog traffic.
+          #
+          # orioledb_page_stats() reports occupancy per pool (main, free_tree,
+          # catalog), not hits and misses.
+          #
+          # Read it as: free_pages still above zero on the `main` pool at the
+          # end of a sustained run means the working set fit in memory; a main
+          # pool driven to free_pages = 0 means it is evicting, i.e. the data
+          # set exceeds the cache. dirty_pages shows checkpoint pressure.
+          #
+          # Unlike the pg_stat_database counters this is a gauge, not a
+          # cumulative counter, so the before/after pair brackets the measured
+          # window rather than needing a delta.
+          type: metadata
+          command: sql
+          args:
+            name: orioledb_page_stats_before
+            query: >-
+              SELECT COALESCE(string_agg(pool_name || '_busy=' || busy_pages || ',' || pool_name || '_free=' || free_pages || ',' || pool_name || '_dirty=' || dirty_pages || ',' || pool_name || '_all=' || all_pages, ',' ORDER BY pool_name), 'none') FROM orioledb_page_stats()
         - name: benchmark
           type: go-tpc
           command: run
@@ -191,6 +216,13 @@ suite:
             name: db_size_after
             query: >-
               SELECT 'total_bytes=' || (pg_database_size(current_database()) + (SELECT COALESCE(sum(size), 0) FROM pg_ls_waldir()) + (SELECT COALESCE(sum(undo_size), 0) FROM orioledb_undo_size()))::bigint
+        - name: get-page-stats-after-benchmark
+          type: metadata
+          command: sql
+          args:
+            name: orioledb_page_stats_after
+            query: >-
+              SELECT COALESCE(string_agg(pool_name || '_busy=' || busy_pages || ',' || pool_name || '_free=' || free_pages || ',' || pool_name || '_dirty=' || dirty_pages || ',' || pool_name || '_all=' || all_pages, ',' ORDER BY pool_name), 'none') FROM orioledb_page_stats()
 driver:
   provider: ec2
   config:

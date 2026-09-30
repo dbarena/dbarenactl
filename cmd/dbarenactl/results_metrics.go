@@ -349,9 +349,55 @@ func orioledbVersionInfo(records []metricRecord) string {
 	return ""
 }
 
+// dbSizeInfoFrom returns the on-disk footprint parsed from a recordName
+// metadata record shaped like "db_bytes=2011349183,waldir_bytes=1077936128",
+// with a third "undo_bytes=..." pair on OrioleDB. It returns nil unless
+// db_bytes and waldir_bytes are both present and numeric, so a partial parse
+// never publishes a half-filled block. undo_bytes is optional: only OrioleDB
+// reports one.
+func dbSizeInfoFrom(records []metricRecord, recordName string) *dbSizeInfo {
+	for _, r := range records {
+		if r.Name != recordName {
+			continue
+		}
+		v, err := r.stringValue()
+		if err != nil {
+			continue
+		}
+		return parseDBSize(v)
+	}
+	return nil
+}
+
+// parseDBSize reads the "k=v,k=v" byte counts dbSizeInfoFrom expects.
+func parseDBSize(value string) *dbSizeInfo {
+	fields := map[string]int64{}
+	for _, part := range strings.Split(value, ",") {
+		key, raw, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok {
+			continue
+		}
+		n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err != nil {
+			continue
+		}
+		fields[strings.TrimSpace(key)] = n
+	}
+	for _, key := range []string{"db_bytes", "waldir_bytes"} {
+		if _, ok := fields[key]; !ok {
+			return nil
+		}
+	}
+	info := &dbSizeInfo{DBBytes: fields["db_bytes"], WALDirBytes: fields["waldir_bytes"]}
+	if undo, ok := fields["undo_bytes"]; ok {
+		info.UndoBytes = &undo
+	}
+	return info
+}
+
 // sizeBytesInfo returns the integer byte count from a recordName metadata
-// record shaped like "total_bytes=2330599835" or "wal_bytes=1077881251", if
-// present at this concurrency level. nil when absent or malformed, matching
+// record shaped like "wal_bytes=1077881251", if present at this concurrency
+// level. nil when absent or malformed, matching
 // parseNetworkRTT's policy of never publishing a half-parsed value.
 func sizeBytesInfo(records []metricRecord, recordName string) *int64 {
 	for _, r := range records {

@@ -181,13 +181,14 @@ suite:
             query: >-
               SELECT 'wal_bytes=' || wal_bytes FROM pg_stat_wal
         - name: get-db-size-before-benchmark
-          # Disk-sizing signal
+          # Disk-sizing signal, reported per component. db_bytes is the size
+          # of the resident data set; waldir_bytes is churn.
           type: metadata
           command: sql
           args:
             name: db_size_before
             query: >-
-              SELECT 'total_bytes=' || (pg_database_size(current_database()) + (SELECT COALESCE(sum(size), 0) FROM pg_ls_waldir()))::bigint
+              SELECT 'db_bytes=' || pg_database_size(current_database()) || ',waldir_bytes=' || (SELECT COALESCE(sum(size), 0)::bigint FROM pg_ls_waldir())
         - name: get-cache-stats-before-benchmark
           # Buffer cache hit ratio measured as:
           #
@@ -225,7 +226,7 @@ suite:
           args:
             name: db_size_after
             query: >-
-              SELECT 'total_bytes=' || (pg_database_size(current_database()) + (SELECT COALESCE(sum(size), 0) FROM pg_ls_waldir()))::bigint
+              SELECT 'db_bytes=' || pg_database_size(current_database()) || ',waldir_bytes=' || (SELECT COALESCE(sum(size), 0)::bigint FROM pg_ls_waldir())
         - name: get-cache-stats-after-benchmark
           type: metadata
           command: sql

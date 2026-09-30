@@ -155,8 +155,20 @@ warning.
 Common `run` flags: `--max-concurrency` (default 1, bounds live environments rather than
 launches in progress), `--iterations` (successful runs
 required per test point, default 3), `--on-workload-failure retry|fail-teardown`, `--set
-key=value` to override manifest parameters, `--benchctl-bin` to point at a non-default
-`benchctl` binary.
+key=value` to override manifest parameters, `--test-point` to restrict the sweep to some of
+the manifest's test points, `--benchctl-bin` to point at a non-default `benchctl` binary.
+
+`--test-point` takes a test point name (`<tier>/<bound-type>[/<variant>]`) or a glob over
+those names, where `*` matches any characters, including `/`. Quote the pattern so the shell
+doesn't expand it first:
+
+```bash
+# One test point
+./dbarenactl run --candidate candidates/aws-rds-tpcc.yaml --test-point small/cache-fit
+
+# Every cache-fit point, across tiers and both cost/performance variants
+./dbarenactl run --candidate candidates/aws-rds-tpcc.yaml --test-point '*cache-fit*'
+```
 
 Common `delete` flags: `--yes`/`-y` to skip the confirmation prompt, `--benchctl-bin` to
 point at a non-default `benchctl` binary.

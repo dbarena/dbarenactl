@@ -27,7 +27,7 @@ Progress lines name a test point and its attempt:
 ```
 
 The name is `<tier>/<bound-type>[/<variant>] #<attempt>`, i.e. the same value
-`--test-point` takes, and the current iteration.
+`--test-point` matches against, and the current iteration.
 
 ## When a sweep stops on its own
 

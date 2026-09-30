@@ -48,8 +48,9 @@ func init() {
 	runCmd.Flags().StringVar(&runBenchctlBin, "benchctl-bin", "benchctl", "Path to the benchctl binary")
 	runCmd.Flags().StringArrayVar(&runSetParams, "set", nil, "Set a manifest parameter referenced as {{ params.NAME }} in the manifest (key=value, repeatable), e.g. --set supabase_org_id=abc1234")
 	runCmd.Flags().StringVar(&runTestPoint, "test-point", "",
-		"Restrict this sweep to one test point, e.g. small/cache-fit or 2xlarge/cache-fit/performance-optimized (see the manifest's "+
-			"test_points) -- omit to run every test point in the manifest")
+		"Restrict this sweep to the test points matching a glob, e.g. small/cache-fit, '*cache-fit*' or '2xlarge/*' (see the "+
+			"manifest's test_points). '*' matches any characters, including '/'; quote the pattern so the shell does not expand "+
+			"it -- omit to run every test point in the manifest")
 	_ = runCmd.MarkFlagRequired("candidate")
 }
 
@@ -104,12 +105,8 @@ func runRun(cmd *cobra.Command, _ []string) error {
 	}
 
 	if runTestPoint != "" {
-		tier, boundType, variant, err := manifest.ParseTestPointRef(runTestPoint)
-		if err != nil {
-			return fmt.Errorf("--test-point: %w", err)
-		}
-		def, ok := m.FindTestPoint(tier, boundType, variant)
-		if !ok {
+		matched := m.MatchTestPoints(runTestPoint)
+		if len(matched) == 0 {
 			keys := make([]string, len(m.TestPoints))
 			for i, d := range m.TestPoints {
 				keys[i] = d.Key()
@@ -117,7 +114,16 @@ func runRun(cmd *cobra.Command, _ []string) error {
 			return fmt.Errorf("--test-point %q: no matching test point in %s (available: %s)",
 				runTestPoint, runCandidate, strings.Join(keys, ", "))
 		}
-		m.TestPoints = []manifest.TestPointDef{*def}
+		// A pattern selects test points the caller never spelled out, so say
+		// which ones it caught before committing hours of runtime to them. An
+		// exact key needs no such echo.
+		if strings.Contains(runTestPoint, "*") {
+			fmt.Fprintf(os.Stderr, "--test-point %s matched %d test point(s):\n", runTestPoint, len(matched))
+			for _, d := range matched {
+				fmt.Fprintf(os.Stderr, "  %s\n", d.Key())
+			}
+		}
+		m.TestPoints = matched
 	}
 
 	sweepID := sweepid.Compute(sweepid.Params{

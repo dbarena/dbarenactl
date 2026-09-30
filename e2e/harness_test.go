@@ -206,6 +206,14 @@ func writeManifest(t *testing.T, workload string, points []testPointSpec) string
 // so it's not a parameter here either.
 func sweepIDFor(t *testing.T, manifestPath, workload string, iterations, maxWorkloadFailures int) string {
 	t.Helper()
+	return sweepIDForScope(t, manifestPath, workload, iterations, maxWorkloadFailures, "")
+}
+
+// sweepIDForScope is sweepIDFor for a sweep restricted with --test-point,
+// whose raw flag value -- pattern included -- is part of the sweep's
+// identity (see internal/sweepid). Pass "" for an unscoped sweep.
+func sweepIDForScope(t *testing.T, manifestPath, workload string, iterations, maxWorkloadFailures int, testPointScope string) string {
+	t.Helper()
 	content, err := os.ReadFile(manifestPath)
 	if err != nil {
 		t.Fatalf("read manifest: %v", err)
@@ -218,6 +226,7 @@ func sweepIDFor(t *testing.T, manifestPath, workload string, iterations, maxWork
 		Iterations:          iterations,
 		OnWorkloadFailure:   "retry",
 		MaxWorkloadFailures: maxWorkloadFailures,
+		TestPointScope:      testPointScope,
 	})
 }
 

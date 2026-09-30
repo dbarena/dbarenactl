@@ -76,19 +76,21 @@ func (d TestPointDef) Key() string {
 	return d.Tier + "/" + d.BoundType + "/" + d.Variant
 }
 
-// ParseTestPointRef splits a "tier/bound_type" or "tier/bound_type/variant"
-// string -- matching TestPointDef.Key()'s own format exactly -- into its
-// parts, e.g. for `dbarenactl run --test-point <ref>`.
-func ParseTestPointRef(ref string) (tier, boundType, variant string, err error) {
-	parts := strings.Split(ref, "/")
-	switch len(parts) {
-	case 2:
-		return parts[0], parts[1], "", nil
-	case 3:
-		return parts[0], parts[1], parts[2], nil
-	default:
-		return "", "", "", fmt.Errorf("invalid test point reference %q -- expected tier/bound_type or tier/bound_type/variant", ref)
+// MatchTestPoints returns every test point whose Key() matches a glob pattern.
+// `*` matches any character including "/", so e.g. `*cache-fit*` can span all
+// three Key() segments. Matches are returned in manifest order. A pattern
+// without `*` is a treated as an exact Key() match.
+func (m *Manifest) MatchTestPoints(pattern string) []TestPointDef {
+	// QuoteMeta first, so every regexp metacharacter a key or pattern may
+	// contain stays literal, and only the `*`s it escaped become wildcards.
+	re := regexp.MustCompile("^" + strings.ReplaceAll(regexp.QuoteMeta(pattern), `\*`, ".*") + "$")
+	var matched []TestPointDef
+	for _, d := range m.TestPoints {
+		if re.MatchString(d.Key()) {
+			matched = append(matched, d)
+		}
 	}
+	return matched
 }
 
 // FindTestPoint returns the test point matching tier/boundType/variant, if

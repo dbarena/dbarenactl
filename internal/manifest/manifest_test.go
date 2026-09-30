@@ -105,28 +105,52 @@ func TestTestPointDef_Key(t *testing.T) {
 	}
 }
 
-func TestParseTestPointRef(t *testing.T) {
-	tier, boundType, variant, err := ParseTestPointRef("small/io")
-	if err != nil {
-		t.Fatalf("ParseTestPointRef: %v", err)
-	}
-	if tier != "small" || boundType != "io" || variant != "" {
-		t.Errorf("got (%q, %q, %q)", tier, boundType, variant)
-	}
+func TestManifest_MatchTestPoints(t *testing.T) {
+	m := &Manifest{TestPoints: []TestPointDef{
+		{Tier: "small", BoundType: "cache-fit"},
+		{Tier: "small", BoundType: "cache-exceeding"},
+		{Tier: "2xlarge", BoundType: "cache-fit", Variant: "performance-optimized"},
+		{Tier: "2xlarge", BoundType: "cache-fit", Variant: "cost-optimized"},
+	}}
 
-	tier, boundType, variant, err = ParseTestPointRef("large/io/matched-to-rds")
-	if err != nil {
-		t.Fatalf("ParseTestPointRef: %v", err)
-	}
-	if tier != "large" || boundType != "io" || variant != "matched-to-rds" {
-		t.Errorf("got (%q, %q, %q)", tier, boundType, variant)
+	for _, tc := range []struct {
+		pattern string
+		want    []string
+	}{
+		// No wildcard: an exact key match, as before globs.
+		{"small/cache-fit", []string{"small/cache-fit"}},
+		{"2xlarge/cache-fit/cost-optimized", []string{"2xlarge/cache-fit/cost-optimized"}},
+		// `*` spans "/", so one bound type selects across tiers and variants.
+		{"*cache-fit*", []string{"small/cache-fit", "2xlarge/cache-fit/performance-optimized", "2xlarge/cache-fit/cost-optimized"}},
+		{"small/*", []string{"small/cache-fit", "small/cache-exceeding"}},
+		{"*/cache-fit/cost-optimized", []string{"2xlarge/cache-fit/cost-optimized"}},
+		{"*", []string{"small/cache-fit", "small/cache-exceeding", "2xlarge/cache-fit/performance-optimized", "2xlarge/cache-fit/cost-optimized"}},
+		// A prefix of a key is not a match, and neither is a pattern nothing
+		// starts with.
+		{"small", nil},
+		{"nope*", nil},
+		// A variant-qualified pattern must not match the no-variant entry.
+		{"small/cache-fit/*", nil},
+	} {
+		var got []string
+		for _, d := range m.MatchTestPoints(tc.pattern) {
+			got = append(got, d.Key())
+		}
+		if strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("MatchTestPoints(%q) = %v, want %v", tc.pattern, got, tc.want)
+		}
 	}
 }
 
-func TestParseTestPointRef_Invalid(t *testing.T) {
-	for _, ref := range []string{"small", "a/b/c/d", ""} {
-		if _, _, _, err := ParseTestPointRef(ref); err == nil {
-			t.Errorf("ParseTestPointRef(%q): expected an error", ref)
+func TestManifest_MatchTestPoints_RegexpMetacharactersAreLiteral(t *testing.T) {
+	m := &Manifest{TestPoints: []TestPointDef{
+		{Tier: "small", BoundType: "cache-fit"},
+	}}
+	// "." must not stand for any character, and the pattern must be anchored
+	// at both ends rather than matched as a substring.
+	for _, pattern := range []string{"small/cache.fit", "cache-fit", "(small)/cache-fit"} {
+		if got := m.MatchTestPoints(pattern); len(got) != 0 {
+			t.Errorf("MatchTestPoints(%q) = %v, want no match", pattern, got)
 		}
 	}
 }

@@ -159,6 +159,22 @@ suite:
             name: db_size_before
             query: >-
               SELECT 'total_bytes=' || (pg_database_size(current_database()) + (SELECT COALESCE(sum(size), 0) FROM pg_ls_waldir()))::bigint
+        - name: get-cache-stats-before-benchmark
+          # Buffer cache hit ratio measured as:
+          #
+          #  blks_hit / (blks_hit + blks_read)
+          #
+          # over the measured window. pg_stat_database's counters are
+          # cumulative since the instance came up, so the ratio has to be read
+          # as the delta between this snapshot and the measurement after the
+          # benchmarks. Note that a miss in shared buffers may still hit the
+          # filesystem page cache, so treat this is worst case estimate.
+          type: metadata
+          command: sql
+          args:
+            name: cache_stats_before
+            query: >-
+              SELECT 'blks_hit=' || blks_hit || ',blks_read=' || blks_read || ',xact_commit=' || xact_commit FROM pg_stat_database WHERE datname = current_database()
         - name: benchmark
           type: go-tpc
           command: run
@@ -181,6 +197,13 @@ suite:
             name: db_size_after
             query: >-
               SELECT 'total_bytes=' || (pg_database_size(current_database()) + (SELECT COALESCE(sum(size), 0) FROM pg_ls_waldir()))::bigint
+        - name: get-cache-stats-after-benchmark
+          type: metadata
+          command: sql
+          args:
+            name: cache_stats_after
+            query: >-
+              SELECT 'blks_hit=' || blks_hit || ',blks_read=' || blks_read || ',xact_commit=' || xact_commit FROM pg_stat_database WHERE datname = current_database()
 driver:
   provider: ec2
   config:

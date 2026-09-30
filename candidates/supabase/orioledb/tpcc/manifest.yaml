@@ -29,7 +29,7 @@ test_points:
       supabase_org_id: "{{ params.supabase_org_id }}"
       region: "us-east-1"
       project_size: small
-      warehouses: "8"
+      warehouses: "4"
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_throughput_mibps: "125"
@@ -56,7 +56,7 @@ test_points:
       supabase_org_id: "{{ params.supabase_org_id }}"
       region: "us-east-1"
       project_size: medium
-      warehouses: "16"
+      warehouses: "8"
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_throughput_mibps: "125"
@@ -83,7 +83,7 @@ test_points:
       supabase_org_id: "{{ params.supabase_org_id }}"
       region: "us-east-1"
       project_size: large
-      warehouses: "32"
+      warehouses: "16"
       disk_size_gb: "20"
       disk_iops: "3000"
       disk_throughput_mibps: "125"
@@ -110,7 +110,7 @@ test_points:
       supabase_org_id: "{{ params.supabase_org_id }}"
       region: "us-east-1"
       project_size: xlarge
-      warehouses: "64"
+      warehouses: "32"
       disk_size_gb: "24"
       disk_iops: "3000"
       disk_throughput_mibps: "125"
@@ -137,7 +137,7 @@ test_points:
       supabase_org_id: "{{ params.supabase_org_id }}"
       region: "us-east-1"
       project_size: 2xlarge
-      warehouses: "128"
+      warehouses: "64"
       disk_size_gb: "64"
       disk_iops: "12000"
       disk_throughput_mibps: "300"
@@ -165,7 +165,7 @@ test_points:
       supabase_org_id: "{{ params.supabase_org_id }}"
       region: "us-east-1"
       project_size: 4xlarge
-      warehouses: "256"
+      warehouses: "128"
       disk_size_gb: "128"
       disk_iops: "12000"
       disk_throughput_mibps: "500"
@@ -179,7 +179,7 @@ test_points:
       supabase_org_id: "{{ params.supabase_org_id }}"
       region: "us-east-1"
       project_size: 4xlarge
-      warehouses: "256"
+      warehouses: "128"
       disk_size_gb: "128"
       disk_iops: "20000"
       disk_throughput_mibps: "600"
@@ -207,7 +207,7 @@ test_points:
       supabase_org_id: "{{ params.supabase_org_id }}"
       region: "us-east-1"
       project_size: 8xlarge
-      warehouses: "512"
+      warehouses: "256"
       disk_size_gb: "256"
       disk_iops: "12000"
       disk_throughput_mibps: "500"
@@ -221,7 +221,7 @@ test_points:
       supabase_org_id: "{{ params.supabase_org_id }}"
       region: "us-east-1"
       project_size: 8xlarge
-      warehouses: "512"
+      warehouses: "256"
       disk_size_gb: "256"
       disk_iops: "40000"
       disk_throughput_mibps: "1200"

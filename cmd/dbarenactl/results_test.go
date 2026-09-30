@@ -753,23 +753,19 @@ func TestOrioledbVersionInfo(t *testing.T) {
 
 func TestSizeBytesInfo(t *testing.T) {
 	records := newOrderMetricRecords("8", 1000, "v1", "v2")
-	if got := sizeBytesInfo(records, "db_size_before"); got != nil {
+	if got := sizeBytesInfo(records, "wal_size_before"); got != nil {
 		t.Errorf("sizeBytesInfo = %v, want nil for records with no matching row", *got)
 	}
 
 	records = append(records,
-		metricRecord{FixtureThreads: "8", Name: "db_size_before", Value: "total_bytes=2011349183"},
-		metricRecord{FixtureThreads: "8", Name: "db_size_after", Value: "total_bytes=2330599835"},
 		metricRecord{FixtureThreads: "8", Name: "wal_size_before", Value: "wal_bytes=863871697"},
 		metricRecord{FixtureThreads: "8", Name: "wal_size_after", Value: "wal_bytes=1077881251"},
-		metricRecord{FixtureThreads: "8", Name: "malformed_size", Value: "total_bytes=not-a-number"},
+		metricRecord{FixtureThreads: "8", Name: "malformed_size", Value: "wal_bytes=not-a-number"},
 	)
 	cases := []struct {
 		recordName string
 		want       int64
 	}{
-		{"db_size_before", 2011349183},
-		{"db_size_after", 2330599835},
 		{"wal_size_before", 863871697},
 		{"wal_size_after", 1077881251},
 	}
@@ -784,6 +780,52 @@ func TestSizeBytesInfo(t *testing.T) {
 	}
 }
 
+// TestDBSizeInfoFrom covers the split db_size_* record: the two-component
+// form every engine reports, OrioleDB's third undo component, and the
+// malformed inputs that must yield nil rather than a half-filled block.
+func TestDBSizeInfoFrom(t *testing.T) {
+	records := newOrderMetricRecords("8", 1000, "v1", "v2")
+	if got := dbSizeInfoFrom(records, "db_size_before"); got != nil {
+		t.Errorf("dbSizeInfoFrom = %v, want nil for records with no matching row", *got)
+	}
+
+	records = append(records,
+		metricRecord{FixtureThreads: "8", Name: "db_size_before", Value: "db_bytes=2011349183,waldir_bytes=1077936128"},
+		metricRecord{FixtureThreads: "8", Name: "db_size_after", Value: "db_bytes=2330599835,waldir_bytes=2147483648,undo_bytes=33554432"},
+		metricRecord{FixtureThreads: "8", Name: "missing_waldir", Value: "db_bytes=2011349183"},
+		metricRecord{FixtureThreads: "8", Name: "non_numeric", Value: "db_bytes=not-a-number,waldir_bytes=1077936128"},
+		metricRecord{FixtureThreads: "8", Name: "legacy_total", Value: "total_bytes=2011349183"},
+	)
+
+	before := dbSizeInfoFrom(records, "db_size_before")
+	if before == nil {
+		t.Fatal("dbSizeInfoFrom(db_size_before) = nil, want a parsed block")
+	}
+	if before.DBBytes != 2011349183 || before.WALDirBytes != 1077936128 {
+		t.Errorf("db_size_before = %+v, want db_bytes 2011349183 and waldir_bytes 1077936128", *before)
+	}
+	if before.UndoBytes != nil {
+		t.Errorf("db_size_before undo_bytes = %d, want nil when the record omits it", *before.UndoBytes)
+	}
+
+	after := dbSizeInfoFrom(records, "db_size_after")
+	if after == nil {
+		t.Fatal("dbSizeInfoFrom(db_size_after) = nil, want a parsed block")
+	}
+	if after.DBBytes != 2330599835 || after.WALDirBytes != 2147483648 {
+		t.Errorf("db_size_after = %+v, want db_bytes 2330599835 and waldir_bytes 2147483648", *after)
+	}
+	if after.UndoBytes == nil || *after.UndoBytes != 33554432 {
+		t.Errorf("db_size_after undo_bytes = %v, want 33554432", after.UndoBytes)
+	}
+
+	for _, name := range []string{"missing_waldir", "non_numeric", "legacy_total"} {
+		if got := dbSizeInfoFrom(records, name); got != nil {
+			t.Errorf("dbSizeInfoFrom(%q) = %+v, want nil rather than a half-filled block", name, *got)
+		}
+	}
+}
+
 // TestBuildResultDoc_CarriesPgSettingsAndSizesIntoTheResult is the
 // end-to-end check that benchctl's pg_settings/orioledb_version/db and WAL
 // size metadata records reach instance and sweep[] respectively.
@@ -792,8 +834,8 @@ func TestBuildResultDoc_CarriesPgSettingsAndSizesIntoTheResult(t *testing.T) {
 	extra := []metricRecord{
 		{FixtureThreads: "12", Name: "pg_settings", Value: "shared_buffers=12800, work_mem=5120"},
 		{FixtureThreads: "12", Name: "orioledb_version", Value: "OrioleDB beta 17"},
-		{FixtureThreads: "12", Name: "db_size_before", Value: "total_bytes=2011349183"},
-		{FixtureThreads: "12", Name: "db_size_after", Value: "total_bytes=2330599835"},
+		{FixtureThreads: "12", Name: "db_size_before", Value: "db_bytes=2011349183,waldir_bytes=1077936128,undo_bytes=16777216"},
+		{FixtureThreads: "12", Name: "db_size_after", Value: "db_bytes=2330599835,waldir_bytes=2147483648,undo_bytes=33554432"},
 		{FixtureThreads: "12", Name: "wal_size_before", Value: "wal_bytes=863871697"},
 		{FixtureThreads: "12", Name: "wal_size_after", Value: "wal_bytes=1077881251"},
 	}
@@ -829,12 +871,28 @@ func TestBuildResultDoc_CarriesPgSettingsAndSizesIntoTheResult(t *testing.T) {
 	}
 	sp := doc.Sweep[0]
 	for _, c := range []struct {
+		name                         string
+		got                          *dbSizeInfo
+		wantDB, wantWALDir, wantUndo int64
+	}{
+		{"db_size_before", sp.DBSizeBefore, 2011349183, 1077936128, 16777216},
+		{"db_size_after", sp.DBSizeAfter, 2330599835, 2147483648, 33554432},
+	} {
+		if c.got == nil {
+			t.Errorf("sweep[0].%s = nil, want a parsed block", c.name)
+			continue
+		}
+		if c.got.DBBytes != c.wantDB || c.got.WALDirBytes != c.wantWALDir ||
+			c.got.UndoBytes == nil || *c.got.UndoBytes != c.wantUndo {
+			t.Errorf("sweep[0].%s = %+v, want db_bytes %d, waldir_bytes %d, undo_bytes %d",
+				c.name, *c.got, c.wantDB, c.wantWALDir, c.wantUndo)
+		}
+	}
+	for _, c := range []struct {
 		name string
 		got  *int64
 		want int64
 	}{
-		{"db_size_before", sp.DBSizeBefore, 2011349183},
-		{"db_size_after", sp.DBSizeAfter, 2330599835},
 		{"wal_size_before", sp.WALSizeBefore, 863871697},
 		{"wal_size_after", sp.WALSizeAfter, 1077881251},
 	} {

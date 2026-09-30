@@ -126,17 +126,30 @@ type sweepPointJSON struct {
 	WorkloadParameters map[string]any  `json:"workload_parameters,omitempty"`
 	Network            *networkInfo    `json:"network,omitempty"`
 	LoadDriver         *loadDriverInfo `json:"load_driver,omitempty"`
-	// DBSize*/WALSize* are byte counts measured immediately before/after
-	// this concurrency level ran. omitempty for the same reason as
-	// Network: absent for Results published before this measurement
-	// existed.
-	DBSizeBefore    *int64           `json:"db_size_before,omitempty"`
-	DBSizeAfter     *int64           `json:"db_size_after,omitempty"`
+	// DBSize*/WALSize* are measured immediately before/after this
+	// concurrency level ran. omitempty for the same reason as Network:
+	// absent for Results published before this measurement existed.
+	DBSizeBefore    *dbSizeInfo      `json:"db_size_before,omitempty"`
+	DBSizeAfter     *dbSizeInfo      `json:"db_size_after,omitempty"`
 	WALSizeBefore   *int64           `json:"wal_size_before,omitempty"`
 	WALSizeAfter    *int64           `json:"wal_size_after,omitempty"`
 	Iterations      []iterationEntry `json:"iterations"`
 	Summary         summaryInfo      `json:"summary"`
 	WorkloadMetrics *workloadMetrics `json:"workload_metrics,omitempty"`
+}
+
+// dbSizeInfo is the target's on-disk footprint broken out by component. The
+// components stay separate rather than summed because only DBBytes says how
+// much of the dataset there is to keep resident: WAL and undo are churn, and a
+// combined figure hides a large one of either behind a plausible total.
+//
+// Results published before the split carry a single summed total_bytes
+// instead. dbarenactl only ever writes Results, never reads them back, so that
+// older shape has no field here.
+type dbSizeInfo struct {
+	DBBytes     int64  `json:"db_bytes"`
+	WALDirBytes int64  `json:"waldir_bytes"`
+	UndoBytes   *int64 `json:"undo_bytes,omitempty"` // OrioleDB only
 }
 
 // networkInfo is the driver-to-target round trip measured just before this

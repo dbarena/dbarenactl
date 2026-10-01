@@ -244,6 +244,32 @@ func TestSelectRuns_EvenRunCountPicksLowerMedian(t *testing.T) {
 	}
 }
 
+// TestSelectRuns_SixRunsPicksLowerMedian covers an even run count above the
+// methodology's minimum: the median is the 3rd-lowest of 6 runs, so every
+// reported figure still comes from a single run.
+func TestSelectRuns_SixRunsPicksLowerMedian(t *testing.T) {
+	runs := []candidateRun{
+		runWithTpm("run-1", 1, map[int]float64{8: 600, 16: 1100}),
+		runWithTpm("run-2", 2, map[int]float64{8: 100, 16: 1600}),
+		runWithTpm("run-3", 3, map[int]float64{8: 400, 16: 1300}),
+		runWithTpm("run-4", 4, map[int]float64{8: 200, 16: 1500}),
+		runWithTpm("run-5", 5, map[int]float64{8: 500, 16: 1200}),
+		runWithTpm("run-6", 6, map[int]float64{8: 300, 16: 1400}),
+	}
+	peak, median, err := selectRuns(runs)
+	if err != nil {
+		t.Fatalf("selectRuns: %v", err)
+	}
+	if peak != 16 {
+		t.Errorf("peak = %d, want 16", peak)
+	}
+	for threads, wantRun := range map[int]string{8: "run-6", 16: "run-3"} {
+		if got := median[threads].run.RunID; got != wantRun {
+			t.Errorf("median[%d] = %s, want %s", threads, got, wantRun)
+		}
+	}
+}
+
 func TestSelectRuns_LevelMissingFromARunCannotBeThePeak(t *testing.T) {
 	runs := []candidateRun{
 		runWithTpm("run-1", 1, map[int]float64{8: 1000, 16: 5000}),

@@ -48,7 +48,7 @@ func TestStaleHeartbeat_FailsRunAndTearsDown(t *testing.T) {
 			const iterations = 1
 			const maxWorkloadFailures = 1
 
-			res := runDbarenactl(t, env.vars(), "",
+			res := runDbarenactl(t, env.vars(), "y\n",
 				"run",
 				"--candidate", manifestPath,
 				"--max-concurrency", itoa(1),

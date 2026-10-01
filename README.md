@@ -21,10 +21,10 @@ mise run build
 
 ```bash
 # Preview what a sweep would do, without touching anything
-./dbarenactl run --candidate candidates/aws-rds-tpcc.yaml --dry-run
+./dbarenactl run --candidate candidates/aws-rds-tpcc.yaml --iterations 3 --dry-run
 
 # Run it
-./dbarenactl run --candidate candidates/aws-rds-tpcc.yaml
+./dbarenactl run --candidate candidates/aws-rds-tpcc.yaml --iterations 3
 ```
 
 `dbarenactl` keeps its state (a local database, per-sweep locks, logs, and fetched result
@@ -141,8 +141,8 @@ warning.
 
 | Command | Description |
 |---|---|
-| `dbarenactl run --candidate <manifest>` | Run a candidate manifest's sweep end to end |
-| `dbarenactl run --candidate <manifest> --dry-run` | Preview the benchctl invocations without running anything |
+| `dbarenactl run --candidate <manifest> --iterations 3` | Run a candidate manifest's sweep end to end |
+| `dbarenactl run --candidate <manifest> --iterations 3 --dry-run` | Preview the benchctl invocations without running anything |
 | `dbarenactl resume [sweep-id]` | Continue an incomplete sweep, or list incomplete sweeps if no id is given |
 | `dbarenactl status [sweep-id] [--all]` | Show sweep progress, or list incomplete sweeps (or all sweeps with `--all`) if no id is given |
 | `dbarenactl delete <sweep-id>` | Permanently delete a sweep's state and tear down associated infrastructure |
@@ -153,8 +153,9 @@ warning.
 | `dbarenactl pricing show <provider> [--region <r>]` | Show a snapshot's line items in full |
 
 Common `run` flags: `--max-concurrency` (default 1, bounds live environments rather than
-launches in progress), `--iterations` (successful runs
-required per test point, default 3), `--on-workload-failure retry|fail-teardown`, `--set
+launches in progress), `--iterations` (required; successful runs
+required per test point -- the methodology requires at least 3, and `run` asks for confirmation
+below that), `--on-workload-failure retry|fail-teardown`, `--set
 key=value` to override manifest parameters, `--test-point` to restrict the sweep to some of
 the manifest's test points, `--benchctl-bin` to point at a non-default `benchctl` binary.
 
@@ -164,10 +165,10 @@ doesn't expand it first:
 
 ```bash
 # One test point
-./dbarenactl run --candidate candidates/aws-rds-tpcc.yaml --test-point small/cache-fit
+./dbarenactl run --candidate candidates/aws-rds-tpcc.yaml --iterations 3 --test-point small/cache-fit
 
 # Every cache-fit point, across tiers and both cost/performance variants
-./dbarenactl run --candidate candidates/aws-rds-tpcc.yaml --test-point '*cache-fit*'
+./dbarenactl run --candidate candidates/aws-rds-tpcc.yaml --iterations 3 --test-point '*cache-fit*'
 ```
 
 Common `delete` flags: `--yes`/`-y` to skip the confirmation prompt, `--benchctl-bin` to

@@ -27,7 +27,7 @@ func TestLaunchFailure_StopsImmediately(t *testing.T) {
 	const maxConcurrency = 1
 	const iterations = 1
 
-	res := runDbarenactl(t, env.vars(), "",
+	res := runDbarenactl(t, env.vars(), "y\n",
 		"run",
 		"--candidate", manifestPath,
 		"--max-concurrency", itoa(maxConcurrency),

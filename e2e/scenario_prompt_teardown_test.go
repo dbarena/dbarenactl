@@ -89,7 +89,7 @@ func TestPromptTeardown_NothingLaunchesWhileAFinishedEnvironmentIsStillUp(t *tes
 	const iterations = 2
 	// More slots than the sweep can usefully fill at once, so nothing but the
 	// scheduler's own policy limits how many environments are alive.
-	res := runDbarenactl(t, env.vars(), "",
+	res := runDbarenactl(t, env.vars(), "y\n",
 		"run",
 		"--candidate", manifestPath,
 		"--max-concurrency", "6",

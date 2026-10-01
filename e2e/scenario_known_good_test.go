@@ -2,7 +2,10 @@
 
 package e2e
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestKnownGood_MultipleTestPointsAllSucceed drives a full sweep across
 // several test points that all succeed, with fewer concurrency slots than
@@ -26,7 +29,7 @@ func TestKnownGood_MultipleTestPointsAllSucceed(t *testing.T) {
 	const maxConcurrency = 2
 	const iterations = 2
 
-	res := runDbarenactl(t, env.vars(), "",
+	res := runDbarenactl(t, env.vars(), "y\n",
 		"run",
 		"--candidate", manifestPath,
 		"--max-concurrency", itoa(maxConcurrency),
@@ -34,6 +37,9 @@ func TestKnownGood_MultipleTestPointsAllSucceed(t *testing.T) {
 	)
 	if res.ExitCode != 0 {
 		t.Fatalf("dbarenactl run: exit code %d\nstdout:\n%s\nstderr:\n%s", res.ExitCode, res.Stdout, res.Stderr)
+	}
+	if !strings.Contains(res.Stderr, "requires at least 3 iterations. Proceed anyway?") {
+		t.Errorf("stderr should warn about --iterations below 3:\n%s", res.Stderr)
 	}
 
 	sweepID := sweepIDFor(t, manifestPath, "known-good", iterations, 0)

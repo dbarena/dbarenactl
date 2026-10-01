@@ -46,7 +46,7 @@ func TestBudgetExhausted_StopsWhileAnotherRunIsInFlight_ThenResumeContinuePicksI
 	const iterations = 1
 	const maxWorkloadFailures = 3
 
-	res := runDbarenactl(t, env.vars(), "",
+	res := runDbarenactl(t, env.vars(), "y\n",
 		"run",
 		"--candidate", manifestPath,
 		"--max-concurrency", itoa(maxConcurrency),

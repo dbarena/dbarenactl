@@ -33,7 +33,7 @@ func liveRunEnv(t *testing.T, workload string, b behavior) (*testEnv, string) {
 	const maxConcurrency = 1
 	const iterations = 1
 
-	res := runDbarenactl(t, env.vars(), "",
+	res := runDbarenactl(t, env.vars(), "y\n",
 		"run",
 		"--candidate", manifestPath,
 		"--max-concurrency", itoa(maxConcurrency),
@@ -181,7 +181,7 @@ func TestDelete_NoRunningEnvironmentsNeedsNoPrompt(t *testing.T) {
 	const maxConcurrency = 1
 	const iterations = 1
 
-	res := runDbarenactl(t, env.vars(), "",
+	res := runDbarenactl(t, env.vars(), "y\n",
 		"run",
 		"--candidate", manifestPath,
 		"--max-concurrency", itoa(maxConcurrency),

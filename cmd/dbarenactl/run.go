@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,7 +42,7 @@ var runCmd = &cobra.Command{
 func init() {
 	runCmd.Flags().StringVar(&runCandidate, "candidate", "", "Path to a sweep manifest, e.g. candidates/aws-rds-tpcc.yaml (required)")
 	runCmd.Flags().IntVar(&runMaxConcurrency, "max-concurrency", 1, "Maximum number of environments running at once")
-	runCmd.Flags().IntVar(&runIterations, "iterations", 3, "Successful iterations required per test point; also the default failure budget (see --max-workload-failures)")
+	runCmd.Flags().IntVar(&runIterations, "iterations", 0, "Successful iterations required per test point (required; the methodology needs at least 3); also the default failure budget (see --max-workload-failures)")
 	runCmd.Flags().IntVar(&runMaxWorkloadFailures, "max-workload-failures", 0, "Override the failure budget independently of --iterations (0 = use --iterations)")
 	runCmd.Flags().StringVar(&runOnWorkloadFailure, "on-workload-failure", "retry", "How to handle a failed (not just slow) workload: retry | fail-teardown")
 	runCmd.Flags().BoolVar(&runDryRun, "dry-run", false, "Preview the benchctl invocations this sweep would make, without touching anything")
@@ -52,6 +53,23 @@ func init() {
 			"manifest's test_points). '*' matches any characters, including '/'; quote the pattern so the shell does not expand "+
 			"it -- omit to run every test point in the manifest")
 	_ = runCmd.MarkFlagRequired("candidate")
+	_ = runCmd.MarkFlagRequired("iterations")
+}
+
+// minIterations is the number of successful iterations per test point that
+// dbarena's benchmark methodology requires.
+const minIterations = 3
+
+var lowIterationsWarning = fmt.Sprintf("dbarena's benchmark methodology requires at least %d iterations.", minIterations)
+
+// confirmLowIterations asks the user to confirm a sweep below the
+// methodology's minimum number of iterations. It does not prompt when
+// iterations meets the minimum.
+func confirmLowIterations(in io.Reader, out io.Writer, iterations int) (bool, error) {
+	if iterations >= minIterations {
+		return true, nil
+	}
+	return promptYesNo(in, out, lowIterationsWarning+" Proceed anyway? [y/N] ")
 }
 
 // parseParams converts ["key=value", ...] from --set flags into a map,
@@ -69,6 +87,9 @@ func parseParams(sets []string) (map[string]string, error) {
 }
 
 func runRun(cmd *cobra.Command, _ []string) error {
+	if runIterations < 1 {
+		return fmt.Errorf("--iterations must be at least 1, got %d", runIterations)
+	}
 	failureBudget := runIterations
 	switch runOnWorkloadFailure {
 	case "retry":
@@ -140,6 +161,10 @@ func runRun(cmd *cobra.Command, _ []string) error {
 	})
 
 	if runDryRun {
+		// A dry run launches nothing, so it warns without asking.
+		if runIterations < minIterations {
+			fmt.Fprintf(os.Stderr, "warning: %s\n", lowIterationsWarning)
+		}
 		return printDryRun(sweepID, m)
 	}
 
@@ -158,6 +183,18 @@ func runRun(cmd *cobra.Command, _ []string) error {
 	defer store.Close() //nolint:errcheck
 
 	existing, err := store.GetSweep(sweepID)
+	// Only a fresh sweep asks: continuing a stopped sweep is a resume, and its
+	// iteration count was settled when it started.
+	startsFresh := errors.Is(err, sweepstate.ErrNotFound) || (err == nil && existing.Status == sweepstate.SweepCompleted)
+	if startsFresh {
+		ok, promptErr := confirmLowIterations(cmd.InOrStdin(), os.Stderr, runIterations)
+		if promptErr != nil {
+			return promptErr
+		}
+		if !ok {
+			return fmt.Errorf("aborted: --iterations %d is below the methodology's minimum of %d", runIterations, minIterations)
+		}
+	}
 	switch {
 	case err == nil && existing.Status == sweepstate.SweepStoppedError && existing.ErrorAction == scheduler.ActionBudgetExhausted:
 		// Deliberately not auto-continued: a budget-exhausted sweep needs an

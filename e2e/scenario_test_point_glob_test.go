@@ -28,6 +28,7 @@ func TestTestPointGlob_DryRunPreviewsEveryMatch(t *testing.T) {
 	res := runDbarenactl(t, env.vars(), "",
 		"run",
 		"--candidate", manifestPath,
+		"--iterations", "3",
 		"--test-point", "*cache-fit*",
 		"--dry-run",
 	)
@@ -65,7 +66,7 @@ func TestTestPointGlob_SweepsOnlyMatchedTestPoints(t *testing.T) {
 	manifestPath := writeManifest(t, workload, globPoints)
 	env := newEnv(t, fakeConfig{Default: behavior{Outcome: "success", WorkloadDuration: "50ms"}})
 
-	res := runDbarenactl(t, env.vars(), "",
+	res := runDbarenactl(t, env.vars(), "y\n",
 		"run",
 		"--candidate", manifestPath,
 		"--test-point", scope,
@@ -117,6 +118,7 @@ func TestTestPointGlob_NoMatchListsAvailable(t *testing.T) {
 	res := runDbarenactl(t, env.vars(), "",
 		"run",
 		"--candidate", manifestPath,
+		"--iterations", "3",
 		"--test-point", "nope*",
 		"--dry-run",
 	)

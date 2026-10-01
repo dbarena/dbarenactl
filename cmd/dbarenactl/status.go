@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/dbarena/dbarenactl/internal/bench"
+	"github.com/dbarena/dbarenactl/internal/scheduler"
 	"github.com/dbarena/dbarenactl/internal/sweepstate"
 )
 
@@ -96,10 +97,11 @@ func runStatusCmd(cmd *cobra.Command, args []string) error {
 	if len(runs) == 0 {
 		return nil
 	}
-	avgDurations, err := successAvgDurationsByTestPoint(store, sweepID)
+	allRuns, err := store.ListRunsForSweep(sweepID)
 	if err != nil {
 		return err
 	}
+	avgDurations := scheduler.AvgSuccessDurations(allRuns)
 	// TEST POINT first, and paired with RUN ID: `run`'s progress output
 	// names runs by their short label only, so this table is where a label
 	// seen there is mapped back to the run id `benchctl` commands take.
@@ -156,9 +158,9 @@ type progress struct {
 }
 
 // computeProgress counts a sweep's successful runs against the total
-// requires runs. If the sweep is still running we derive a best effort
-// ETA if each remaining test point has at least one successful run to
-// estimate a duration from, an ETA for the rest of the sweep.
+// required runs. While the sweep is running, it also estimates the remaining
+// time by simulating the scheduler (see scheduler.EstimateRemaining), once
+// every remaining test point has a successful run to estimate from.
 func computeProgress(store *sweepstate.Store, sweep *sweepstate.Sweep) (progress, error) {
 	testPoints, err := store.ListTestPoints(sweep.ID)
 	if err != nil {
@@ -183,101 +185,13 @@ func computeProgress(store *sweepstate.Store, sweep *sweepstate.Sweep) (progress
 	if err != nil {
 		return progress{}, err
 	}
-	avgDurations := avgDurationsFromRuns(runs)
-	now := time.Now()
-	inFlightElapsed := map[string][]time.Duration{}
-	for _, r := range runs {
-		if !r.Status.Terminal() {
-			inFlightElapsed[r.TestPointID] = append(inFlightElapsed[r.TestPointID], now.Sub(r.CreatedAt))
-		}
-	}
-
-	var remaining time.Duration
-	var maxInFlightRemaining time.Duration
-	for _, tp := range testPoints {
-		if tp.Skipped || tp.Satisfied() {
-			continue
-		}
-		avg, ok := avgDurations[tp.ID]
-		if !ok {
-			// Not enough data yet to estimate this test point's duration, so
-			// not enough to estimate the sweep's remaining time either.
-			return p, nil
-		}
-		attemptsLeft := tp.SuccessesNeeded - tp.SuccessesCount
-		grossWork := avg * time.Duration(attemptsLeft)
-
-		// Credit runs already in flight for this test point with the time
-		// they've already spent, capped at avg per run so an overrunning run
-		// can't push this test point's contribution negative. Track each
-		// run's own remaining time (avg - elapsed, floored at 0) too: the
-		// sweep can't finish before its slowest in-flight run does, no
-		// matter how much concurrency is left to divide the rest of the
-		// work across.
-		var credit time.Duration
-		for _, elapsed := range inFlightElapsed[tp.ID] {
-			runRemaining := avg - elapsed
-			if runRemaining < 0 {
-				runRemaining = 0
-			}
-			if runRemaining > maxInFlightRemaining {
-				maxInFlightRemaining = runRemaining
-			}
-			if elapsed > avg {
-				elapsed = avg
-			}
-			credit += elapsed
-		}
-
-		tpRemaining := grossWork - credit
-		if tpRemaining < 0 {
-			tpRemaining = 0
-		}
-		remaining += tpRemaining
-	}
-
 	concurrency := 1
 	var params sweepParams
 	if err := json.Unmarshal([]byte(sweep.ParamsJSON), &params); err == nil && params.MaxConcurrency > 0 {
 		concurrency = params.MaxConcurrency
 	}
-
-	p.ETA = remaining / time.Duration(concurrency)
-	if maxInFlightRemaining > p.ETA {
-		p.ETA = maxInFlightRemaining
-	}
-	p.HasETA = true
+	p.ETA, p.HasETA = scheduler.EstimateRemaining(testPoints, runs, time.Now(), concurrency)
 	return p, nil
-}
-
-// avgDurationsFromRuns returns each test point's average duration across its
-// successful terminal runs, keyed by test point id, for test points with at
-// least one such run.
-func avgDurationsFromRuns(runs []*sweepstate.Run) map[string]time.Duration {
-	sums := map[string]time.Duration{}
-	counts := map[string]int{}
-	for _, r := range runs {
-		if r.Outcome == "success" {
-			sums[r.TestPointID] += r.UpdatedAt.Sub(r.CreatedAt)
-			counts[r.TestPointID]++
-		}
-	}
-	avgs := make(map[string]time.Duration, len(sums))
-	for id, sum := range sums {
-		avgs[id] = sum / time.Duration(counts[id])
-	}
-	return avgs
-}
-
-// successAvgDurationsByTestPoint is avgDurationsFromRuns for every run in
-// sweepID, for callers (e.g. the active-runs table) that haven't already
-// loaded the sweep's runs themselves.
-func successAvgDurationsByTestPoint(store *sweepstate.Store, sweepID string) (map[string]time.Duration, error) {
-	runs, err := store.ListRunsForSweep(sweepID)
-	if err != nil {
-		return nil, err
-	}
-	return avgDurationsFromRuns(runs), nil
 }
 
 // formatDuration renders d as e.g. "2h15m" or "45m" ("<1m" for anything

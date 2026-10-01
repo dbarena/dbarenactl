@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dbarena/dbarenactl/internal/scheduler"
 	"github.com/dbarena/dbarenactl/internal/sweepstate"
 )
 
@@ -60,7 +61,7 @@ func TestComputeProgress_ClampsToLongestInFlightRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	avg := avgDurationsFromRuns(runs)[tp.ID]
+	avg := scheduler.AvgSuccessDurations(runs)[tp.ID]
 	if avg <= 0 {
 		t.Fatalf("expected a positive baseline average, got %v", avg)
 	}

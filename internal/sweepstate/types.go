@@ -162,4 +162,9 @@ type Run struct {
 	FetchAttempts int
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+	// ProvisionedAt is when provisioning finished and the run moved to
+	// RunWaitingRemote. Nil if that hasn't happened yet, if the run was
+	// recovered after a crash (the real time is unknown), or if it was
+	// launched by a dbarenactl version that didn't record it.
+	ProvisionedAt *time.Time
 }

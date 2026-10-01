@@ -484,7 +484,7 @@ func (s *Store) DeleteRun(runID string) error {
 // GetRun loads a single run by id.
 func (s *Store) GetRun(runID string) (*Run, error) {
 	row := s.db.QueryRow(
-		`SELECT run_id, test_point_id, iteration_attempt, status, outcome, local_artifact_dir, fetch_attempts, created_at, updated_at
+		`SELECT run_id, test_point_id, iteration_attempt, status, outcome, local_artifact_dir, fetch_attempts, created_at, updated_at, provisioned_at
 		 FROM runs WHERE run_id = ?`, runID,
 	)
 	run, err := scanRun(row)
@@ -498,7 +498,7 @@ func (s *Store) GetRun(runID string) (*Run, error) {
 // yet Terminal(), across all of the sweep's test points.
 func (s *Store) ListNonTerminalRuns(sweepID string) ([]*Run, error) {
 	rows, err := s.db.Query(
-		`SELECT r.run_id, r.test_point_id, r.iteration_attempt, r.status, r.outcome, r.local_artifact_dir, r.fetch_attempts, r.created_at, r.updated_at
+		`SELECT r.run_id, r.test_point_id, r.iteration_attempt, r.status, r.outcome, r.local_artifact_dir, r.fetch_attempts, r.created_at, r.updated_at, r.provisioned_at
 		 FROM runs r JOIN test_points tp ON tp.id = r.test_point_id
 		 WHERE tp.sweep_id = ? AND r.status NOT IN (?, ?)
 		 ORDER BY r.created_at`,
@@ -526,7 +526,7 @@ func (s *Store) ListNonTerminalRuns(sweepID string) ([]*Run, error) {
 // ETA estimate, avoiding an N+1 query per test point.
 func (s *Store) ListRunsForSweep(sweepID string) ([]*Run, error) {
 	rows, err := s.db.Query(
-		`SELECT r.run_id, r.test_point_id, r.iteration_attempt, r.status, r.outcome, r.local_artifact_dir, r.fetch_attempts, r.created_at, r.updated_at
+		`SELECT r.run_id, r.test_point_id, r.iteration_attempt, r.status, r.outcome, r.local_artifact_dir, r.fetch_attempts, r.created_at, r.updated_at, r.provisioned_at
 		 FROM runs r JOIN test_points tp ON tp.id = r.test_point_id
 		 WHERE tp.sweep_id = ?
 		 ORDER BY r.created_at`,
@@ -555,7 +555,7 @@ func (s *Store) ListRunsForSweep(sweepID string) ([]*Run, error) {
 // on Outcome/LocalArtifactDir themselves.
 func (s *Store) ListRunsForTestPoint(testPointID string) ([]*Run, error) {
 	rows, err := s.db.Query(
-		`SELECT run_id, test_point_id, iteration_attempt, status, outcome, local_artifact_dir, fetch_attempts, created_at, updated_at
+		`SELECT run_id, test_point_id, iteration_attempt, status, outcome, local_artifact_dir, fetch_attempts, created_at, updated_at, provisioned_at
 		 FROM runs WHERE test_point_id = ? ORDER BY iteration_attempt`,
 		testPointID,
 	)
@@ -578,11 +578,15 @@ func (s *Store) ListRunsForTestPoint(testPointID string) ([]*Run, error) {
 func scanRun(r rowScanner) (*Run, error) {
 	var run Run
 	var status string
+	var provisionedAt sql.NullTime
 	if err := r.Scan(&run.RunID, &run.TestPointID, &run.IterationAttempt, &status, &run.Outcome,
-		&run.LocalArtifactDir, &run.FetchAttempts, &run.CreatedAt, &run.UpdatedAt); err != nil {
+		&run.LocalArtifactDir, &run.FetchAttempts, &run.CreatedAt, &run.UpdatedAt, &provisionedAt); err != nil {
 		return nil, fmt.Errorf("sweepstate: scan run: %w", err)
 	}
 	run.Status = RunStatus(status)
+	if provisionedAt.Valid {
+		run.ProvisionedAt = &provisionedAt.Time
+	}
 	return &run, nil
 }
 
@@ -593,6 +597,19 @@ func (s *Store) SetRunStatus(runID string, status RunStatus) error {
 	res, err := s.db.Exec(`UPDATE runs SET status = ?, updated_at = ? WHERE run_id = ?`, string(status), time.Now().UTC(), runID)
 	if err != nil {
 		return fmt.Errorf("sweepstate: set run %s status: %w", runID, err)
+	}
+	return checkOneRowAffected(res, "run", runID)
+}
+
+// MarkRunProvisioned moves a run that dbarenactl itself just finished
+// provisioning to RunWaitingRemote, recording when provisioning completed so
+// status's ETA can estimate how long launches take.
+func (s *Store) MarkRunProvisioned(runID string) error {
+	now := time.Now().UTC()
+	res, err := s.db.Exec(`UPDATE runs SET status = ?, provisioned_at = ?, updated_at = ? WHERE run_id = ?`,
+		string(RunWaitingRemote), now, now, runID)
+	if err != nil {
+		return fmt.Errorf("sweepstate: mark run %s provisioned: %w", runID, err)
 	}
 	return checkOneRowAffected(res, "run", runID)
 }

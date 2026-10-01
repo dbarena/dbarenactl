@@ -368,20 +368,7 @@ func (s *Scheduler) Step(ctx context.Context, sweepID string, opts Options) (Ste
 		}
 	}
 
-	allSatisfied := true
-	var exhausted *sweepstate.TestPoint
-	launchable := make([]*sweepstate.TestPoint, 0, len(testPoints))
-	for _, tp := range testPoints {
-		if tp.Satisfied() || tp.Skipped {
-			continue
-		}
-		allSatisfied = false
-		if tp.BudgetExhausted() {
-			exhausted = tp
-			continue
-		}
-		launchable = append(launchable, tp)
-	}
+	launchable, allSatisfied, exhausted := classifyTestPoints(testPoints)
 
 	// At most one launch per pass, and only once nothing is left to drain.
 	// Both conditions exist for the same reason: provisioning blocks for
@@ -392,7 +379,7 @@ func (s *Scheduler) Step(ctx context.Context, sweepID string, opts Options) (Ste
 	// retried next pass, bounded by opts.FetchRetryLimit.
 	next := nextToLaunch(launchable, pendingByTestPoint)
 	switch {
-	case next == nil || s.launchBusy() || inFlight >= opts.MaxConcurrency:
+	case next == nil || !canLaunch(inFlight, opts.MaxConcurrency, s.launchBusy()):
 		// Nothing wants a slot, a provision is already running, or the
 		// sweep is at capacity.
 	case draining:
@@ -739,6 +726,34 @@ func (s *Scheduler) reconcileNeedsTeardown(ctx context.Context, sweepID string, 
 	return true, nil
 }
 
+// classifyTestPoints splits a sweep's test points for one scheduling pass:
+// those that may get a new attempt, whether every test point is done
+// (satisfied or skipped), and one that exhausted its failure budget, if any.
+// Shared with EstimateRemaining so the ETA simulation follows the same rules.
+func classifyTestPoints(testPoints []*sweepstate.TestPoint) (launchable []*sweepstate.TestPoint, allSatisfied bool, exhausted *sweepstate.TestPoint) {
+	allSatisfied = true
+	launchable = make([]*sweepstate.TestPoint, 0, len(testPoints))
+	for _, tp := range testPoints {
+		if tp.Satisfied() || tp.Skipped {
+			continue
+		}
+		allSatisfied = false
+		if tp.BudgetExhausted() {
+			exhausted = tp
+			continue
+		}
+		launchable = append(launchable, tp)
+	}
+	return launchable, allSatisfied, exhausted
+}
+
+// canLaunch reports whether a new attempt may start: the sweep has a free
+// slot and no other provision is in flight (see launchBusy). Shared with
+// EstimateRemaining.
+func canLaunch(inFlight, maxConcurrency int, launchBusy bool) bool {
+	return !launchBusy && inFlight < maxConcurrency
+}
+
 // nextToLaunch picks the single test point to start an attempt for, or nil
 // if none can use one. Choosing the eligible test point with the fewest
 // attempts started so far -- completed (success or failure) or still in
@@ -747,10 +762,10 @@ func (s *Scheduler) reconcileNeedsTeardown(ctx context.Context, sweepID string, 
 // gets its first attempt before any gets a second, its second before any
 // gets a third, and so on. This holds even at max-concurrency 1, where at
 // most one attempt is ever in flight, because completed attempts count too.
-// Breadth-first matters here because the sweep's ETA (see cmd/dbarenactl
-// status.go) can't be computed until every remaining test point has at
-// least one completed run to estimate from -- finishing one test point
-// entirely before starting its neighbors would delay that indefinitely.
+// Breadth-first matters here because the sweep's ETA (see EstimateRemaining)
+// can't be computed until every remaining test point has at least one
+// completed run to estimate from -- finishing one test point entirely before
+// starting its neighbors would delay that indefinitely.
 func nextToLaunch(launchable []*sweepstate.TestPoint, pendingByTestPoint map[string]int) *sweepstate.TestPoint {
 	var best *sweepstate.TestPoint
 	var bestAttempts int
@@ -807,7 +822,7 @@ func (s *Scheduler) launchAsync(ctx context.Context, tp *sweepstate.TestPoint, a
 		defer s.wg.Done()
 		err := s.Bench.LaunchAsync(ctx, runID, tp.Scenario, tp.Set)
 		if err == nil {
-			err = s.Store.SetRunStatus(runID, sweepstate.RunWaitingRemote)
+			err = s.Store.MarkRunProvisioned(runID)
 		}
 
 		s.mu.Lock()

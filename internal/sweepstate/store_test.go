@@ -940,3 +940,69 @@ func TestTestPoint_RunLabel(t *testing.T) {
 		})
 	}
 }
+
+func TestMarkRunProvisioned(t *testing.T) {
+	st := openTestStore(t)
+	seedSweep(t, st, "sweep-1")
+	seedTestPoint(t, st, "sweep-1", "tp-1", 1, 1)
+	if err := st.CreateRun(&Run{RunID: "run-1", TestPointID: "tp-1", IterationAttempt: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := st.GetRun("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ProvisionedAt != nil {
+		t.Fatalf("ProvisionedAt = %v before provisioning, want nil", got.ProvisionedAt)
+	}
+
+	if err := st.MarkRunProvisioned("run-1"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = st.GetRun("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != RunWaitingRemote {
+		t.Errorf("Status = %q, want %q", got.Status, RunWaitingRemote)
+	}
+	if got.ProvisionedAt == nil || got.ProvisionedAt.Before(got.CreatedAt) {
+		t.Errorf("ProvisionedAt = %v, want a time at or after CreatedAt %v", got.ProvisionedAt, got.CreatedAt)
+	}
+}
+
+// TestOpen_AddsProvisionedAtColumn guards the migration for databases created
+// before runs.provisioned_at existed: existing runs must survive with the
+// column NULL, and reopening must be idempotent.
+func TestOpen_AddsProvisionedAtColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dbarenactl.db")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedSweep(t, st, "sweep-1")
+	seedTestPoint(t, st, "sweep-1", "tp-1", 1, 1)
+	if err := st.CreateRun(&Run{RunID: "run-1", TestPointID: "tp-1", IterationAttempt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`ALTER TABLE runs DROP COLUMN provisioned_at`); err != nil {
+		t.Fatal(err)
+	}
+	st.Close()
+
+	for i := 0; i < 2; i++ {
+		st, err := Open(path)
+		if err != nil {
+			t.Fatalf("reopen %d: %v", i, err)
+		}
+		got, err := st.GetRun("run-1")
+		if err != nil {
+			t.Fatalf("reopen %d: GetRun: %v", i, err)
+		}
+		if got.ProvisionedAt != nil {
+			t.Errorf("reopen %d: ProvisionedAt = %v, want nil", i, got.ProvisionedAt)
+		}
+		st.Close()
+	}
+}

@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS runs (
 	local_artifact_dir TEXT NOT NULL DEFAULT '',
 	fetch_attempts     INTEGER NOT NULL DEFAULT 0,
 	created_at         DATETIME NOT NULL,
-	updated_at         DATETIME NOT NULL
+	updated_at         DATETIME NOT NULL,
+	provisioned_at     DATETIME
 );
 CREATE INDEX IF NOT EXISTS idx_runs_test_point ON runs(test_point_id);
 `
@@ -96,6 +97,10 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	if err := addLastStartedAtColumnIfMissing(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := addProvisionedAtColumnIfMissing(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -175,6 +180,43 @@ func addLastStartedAtColumnIfMissing(db *sql.DB) error {
 	}
 	if _, err := db.Exec(`UPDATE sweeps SET last_started_at = created_at WHERE last_started_at IS NULL`); err != nil {
 		return fmt.Errorf("sweepstate: backfill sweeps.last_started_at: %w", err)
+	}
+	return nil
+}
+
+// addProvisionedAtColumnIfMissing retrofits runs.provisioned_at onto a
+// database created before that column existed. The column is nullable and
+// every query names its columns explicitly, so a dbarenactl process built
+// before this migration keeps working against the migrated database; its
+// runs just leave the column NULL.
+func addProvisionedAtColumnIfMissing(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(runs)`)
+	if err != nil {
+		return fmt.Errorf("sweepstate: inspect runs schema: %w", err)
+	}
+	defer rows.Close()
+
+	hasProvisionedAt := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notNull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notNull, &dflt, &pk); err != nil {
+			return fmt.Errorf("sweepstate: inspect runs schema: %w", err)
+		}
+		if name == "provisioned_at" {
+			hasProvisionedAt = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("sweepstate: inspect runs schema: %w", err)
+	}
+	if hasProvisionedAt {
+		return nil
+	}
+	if _, err := db.Exec(`ALTER TABLE runs ADD COLUMN provisioned_at DATETIME`); err != nil {
+		return fmt.Errorf("sweepstate: add runs.provisioned_at column: %w", err)
 	}
 	return nil
 }

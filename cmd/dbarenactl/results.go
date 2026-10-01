@@ -144,7 +144,11 @@ func runResults(_ *cobra.Command, args []string) error {
 			if len(metrics) == 0 {
 				continue
 			}
-			successful = append(successful, candidateRun{run: r, metricsByThreads: metrics, rawSamplesByThreads: rawSamples})
+			stepWindows, err := loadStepWindows(r.LocalArtifactDir)
+			if err != nil {
+				return fmt.Errorf("dbarenactl results: %s: read step windows for run %s: %w", scenario, r.RunID, err)
+			}
+			successful = append(successful, candidateRun{run: r, metricsByThreads: metrics, rawSamplesByThreads: rawSamples, stepWindows: stepWindows})
 		}
 
 		if len(successful) < tp.SuccessesNeeded && !resultsForce {
@@ -161,12 +165,10 @@ func runResults(_ *cobra.Command, args []string) error {
 
 		provider := slugify(m.Provider)
 		product := slugify(m.Product)
-		// Computed before buildResultDoc (not after, as result.json's own
-		// write used to be) so buildResultDoc can write raw-clients-<n>.csv
-		// into it directly, alongside setting the matching iteration's
-		// raw_metrics_file -- doc and CSV need to agree with each other,
-		// and buildResultDoc is the one place that already knows which
-		// iteration was selected.
+		// Computed before buildResultDoc so it can write each iteration's
+		// raw-clients CSV into it directly, alongside setting that
+		// iteration's raw_metrics_file -- doc and CSVs need to agree with
+		// each other.
 		scenarioDir := filepath.Join(dest, "results", provider, product, m.Workload, scenario)
 		if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
 			return fmt.Errorf("dbarenactl results: %s: %w", scenario, err)
@@ -320,7 +322,7 @@ type resultDocInputs struct {
 // buildInstanceInfo, buildReproducibility, computePricing -- each of which
 // takes only what it needs, not this function's full input set.
 func buildResultDoc(in resultDocInputs) (*resultDoc, error) {
-	selected, _, err := selectRepresentativeRun(in.Successful)
+	peak, median, err := selectRuns(in.Successful)
 	if err != nil {
 		return nil, err
 	}
@@ -330,7 +332,7 @@ func buildResultDoc(in resultDocInputs) (*resultDoc, error) {
 	scenario := scenarioSlug(in.TestPoint.BoundType, in.TestPoint.Tier, in.TestPoint.Variant)
 	pi := resolvePricingInputs(in.Manifest.Provider, in.Def)
 
-	sp, err := buildSweepPoints(scenario, in.Successful, selected, pi.warehouses, in.ScenarioDir)
+	sp, err := buildSweepPoints(scenario, in.Successful, peak, median, pi.warehouses, in.ScenarioDir)
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +347,7 @@ func buildResultDoc(in resultDocInputs) (*resultDoc, error) {
 	}
 
 	return &resultDoc{
-		SchemaVersion:   "1.3.0",
+		SchemaVersion:   "2.0.0",
 		Provider:        provider,
 		Product:         product,
 		Workload:        in.Manifest.Workload,
@@ -412,7 +414,7 @@ func buildReproducibility(tp *sweepstate.TestPoint, manifestPath, benchctlVersio
 }
 
 // computePricing computes the result's pricing block and backfills
-// tpm_per_dollar_month onto every sweep point in place. Returns (nil, nil)
+// tpm_per_dollar_month onto every iteration in place, from its NEW_ORDER tpm. Returns (nil, nil)
 // when there's no pricing snapshot -- pricing: null is expected, not an
 // error. Returns an error only when a snapshot exists but no cost
 // calculator is registered for pricingFetcherKey (a real configuration
@@ -459,12 +461,19 @@ func computePricing(snapshot *pricing.Snapshot, pricingFetcherKey string, pi pri
 		Components:   components,
 	}
 	for i := range points {
-		// tpm_per_dollar_month is a throughput/dollar ratio, not currency --
-		// rounded to 2 decimal places (a separate policy from
-		// pricing.MoneyDecimals) to drop float64 division noise without
-		// implying more precision than the underlying measurement supports.
-		v := pricing.RoundTo(points[i].Summary.Throughput.Value/pricingOut.MonthlyUSD, 2)
-		points[i].Summary.TpmPerDollarMonth = &v
+		for j := range points[i].Iterations {
+			it := &points[i].Iterations[j]
+			newOrder, ok := it.WorkloadMetrics.Transactions["NEW_ORDER"]
+			if !ok {
+				continue
+			}
+			// tpm_per_dollar_month is a throughput/dollar ratio, not currency --
+			// rounded to 2 decimal places (a separate policy from
+			// pricing.MoneyDecimals) to drop float64 division noise without
+			// implying more precision than the underlying measurement supports.
+			v := pricing.RoundTo(newOrder.Tpm/pricingOut.MonthlyUSD, 2)
+			it.TpmPerDollarMonth = &v
+		}
 	}
 	return pricingOut, nil
 }

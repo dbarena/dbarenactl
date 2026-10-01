@@ -37,12 +37,12 @@ var rawSamplesColumns = []string{
 }
 
 // rawClientsHeader is dbarena results/'s raw-clients-<threads>.csv header.
-// Scoped to the primary transaction type only.
+// Scoped to the primary transaction type and to throughput only -- full
+// latency detail for NEW_ORDER (and for the other TPC-C transactions) lives
+// in result.json's per-iteration workload_metrics.transactions.*.latency_ms,
+// not in this raw per-tick series.
 var rawClientsHeader = []string{
-	"t_seconds", "new_order_tpm", "new_order_avg_latency_ms",
-	"new_order_p50_latency_ms", "new_order_p90_latency_ms",
-	"new_order_p95_latency_ms", "new_order_p99_latency_ms",
-	"new_order_p99_9_latency_ms", "new_order_max_latency_ms",
+	"t_seconds", "new_order_tpm",
 }
 
 // newOrderRow is one NEW_ORDER/ok tick, kept in rawClientsHeader's column
@@ -131,13 +131,6 @@ func readNewOrderOkRows(srcPath string) ([]newOrderRow, error) {
 			fields: []string{
 				tSecondsStr,
 				record[idx["tpm"]],
-				record[idx["avg_latency_ms"]],
-				record[idx["p50_latency_ms"]],
-				record[idx["p90_latency_ms"]],
-				record[idx["p95_latency_ms"]],
-				record[idx["p99_latency_ms"]],
-				record[idx["p99_9_latency_ms"]],
-				record[idx["max_latency_ms"]],
 			},
 		})
 	}

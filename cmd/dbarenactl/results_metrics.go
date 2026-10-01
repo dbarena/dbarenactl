@@ -2,12 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dbarena/dbarenactl/internal/pricing"
 	"github.com/dbarena/dbarenactl/internal/sweepstate"
@@ -111,12 +113,55 @@ func loadRunMetrics(artifactDir string) (map[int][]metricRecord, map[int]string,
 	return byThreads, rawSamplesByThreads, nil
 }
 
+// stepWindow is when one benchctl step ran.
+type stepWindow struct {
+	StartedAt time.Time `json:"started_at"`
+	EndedAt   time.Time `json:"ended_at"`
+}
+
+// loadStepWindows reads benchctl's step_windows.json in artifactDir and
+// returns each concurrency level's measured "benchmark" step, keyed by its
+// client_threads fixture value. It returns nil, not an error, when the file
+// doesn't exist: runs made before benchctl wrote it have none.
+func loadStepWindows(artifactDir string) (map[int]stepWindow, error) {
+	path := filepath.Join(artifactDir, "step_windows.json")
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	var entries []struct {
+		stepWindow
+		Step    string            `json:"step"`
+		Fixture map[string]string `json:"fixture"`
+	}
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	windows := map[int]stepWindow{}
+	for _, e := range entries {
+		if e.Step != "benchmark" {
+			continue
+		}
+		threads, err := strconv.Atoi(e.Fixture["client_threads"])
+		if err != nil {
+			return nil, fmt.Errorf("%s: client_threads %q is not an integer: %w", path, e.Fixture["client_threads"], err)
+		}
+		windows[threads] = e.stepWindow
+	}
+	return windows, nil
+}
+
 // candidateRun is one successful, artifact-bearing run being considered as
 // the representative iteration for a test point.
 type candidateRun struct {
 	run                 *sweepstate.Run
 	metricsByThreads    map[int][]metricRecord
 	rawSamplesByThreads map[int]string
+	// stepWindows is nil for runs whose artifacts predate step_windows.json.
+	stepWindows map[int]stepWindow
 }
 
 // tpmAt returns the primary-metric (tpm for NEW_ORDER, status=ok) throughput
@@ -130,56 +175,59 @@ func tpmAt(records []metricRecord) (float64, error) {
 	return 0, fmt.Errorf("no tpcc_tpm/NEW_ORDER/ok record found")
 }
 
-// selectRepresentativeRun picks the single run whose peak-concurrency
-// throughput is the median among candidates, per the documented policy: no
-// pooling/intermingling across a test point's independent iterations --
-// every field in the result comes from exactly one chosen run.
+// selectRuns applies the documented reporting policy: at every concurrency
+// level it picks the run with the median tpm, and the peak is the level whose
+// median tpm is highest. Each reported figure still comes from exactly one
+// run -- no pooling across a test point's independent iterations.
 //
-// The peak concurrency compared is the highest fixture_threads value common
-// to every candidate (a run missing data at that level can't be compared
-// there and is excluded from consideration, but doesn't lower the peak
-// itself). For an even number of candidates, the lower-median is chosen.
-func selectRepresentativeRun(candidates []candidateRun) (candidateRun, int, error) {
-	if len(candidates) == 0 {
-		return candidateRun{}, 0, fmt.Errorf("no candidate runs to select from")
+// Only levels every run has data for can be the peak, so a run missing a
+// level can't decide it by omission. Ties go to the lower concurrency. For
+// an even number of runs at a level, the lower median is chosen.
+func selectRuns(runs []candidateRun) (peak int, median map[int]candidateRun, err error) {
+	if len(runs) == 0 {
+		return 0, nil, fmt.Errorf("no candidate runs to select from")
 	}
 
-	common := map[int]bool{}
-	for threads := range candidates[0].metricsByThreads {
-		common[threads] = true
-	}
-	for _, c := range candidates[1:] {
-		for threads := range common {
-			if _, ok := c.metricsByThreads[threads]; !ok {
-				delete(common, threads)
-			}
+	byThreads := map[int][]candidateRun{}
+	for _, c := range runs {
+		for threads := range c.metricsByThreads {
+			byThreads[threads] = append(byThreads[threads], c)
 		}
 	}
-	peak := -1
-	for threads := range common {
-		if threads > peak {
-			peak = threads
+	var levels []int
+	for threads := range byThreads {
+		levels = append(levels, threads)
+	}
+	sort.Ints(levels)
+
+	median = map[int]candidateRun{}
+	peak = -1
+	var peakTpm float64
+	for _, threads := range levels {
+		type scored struct {
+			c   candidateRun
+			tpm float64
+		}
+		var scoredRuns []scored
+		for _, c := range byThreads[threads] {
+			tpm, err := tpmAt(c.metricsByThreads[threads])
+			if err != nil {
+				return 0, nil, fmt.Errorf("run %s at concurrency %d: %w", c.run.RunID, threads, err)
+			}
+			scoredRuns = append(scoredRuns, scored{c, tpm})
+		}
+		sort.SliceStable(scoredRuns, func(i, j int) bool { return scoredRuns[i].tpm < scoredRuns[j].tpm })
+		m := scoredRuns[(len(scoredRuns)-1)/2]
+		median[threads] = m.c
+
+		if len(scoredRuns) == len(runs) && (peak == -1 || m.tpm > peakTpm) {
+			peak, peakTpm = threads, m.tpm
 		}
 	}
 	if peak == -1 {
-		return candidateRun{}, 0, fmt.Errorf("no concurrency level is common to all %d candidate runs", len(candidates))
+		return 0, nil, fmt.Errorf("no concurrency level is common to all %d candidate runs", len(runs))
 	}
-
-	type scored struct {
-		c   candidateRun
-		tpm float64
-	}
-	var scoredRuns []scored
-	for _, c := range candidates {
-		tpm, err := tpmAt(c.metricsByThreads[peak])
-		if err != nil {
-			return candidateRun{}, 0, fmt.Errorf("run %s at concurrency %d: %w", c.run.RunID, peak, err)
-		}
-		scoredRuns = append(scoredRuns, scored{c, tpm})
-	}
-	sort.Slice(scoredRuns, func(i, j int) bool { return scoredRuns[i].tpm < scoredRuns[j].tpm })
-	median := scoredRuns[(len(scoredRuns)-1)/2]
-	return median.c, peak, nil
+	return peak, median, nil
 }
 
 // txnNames lists transaction types in the order the schema's example data presents them.
@@ -266,29 +314,6 @@ func buildTxnMetrics(records []metricRecord) (map[string]txnMetrics, map[string]
 	return txns, errs, nil
 }
 
-// latencyFor returns the p50/p95/p99 latency for one transaction at a
-// concurrency level, for the schema's top-level summary.latency_ms.
-func latencyFor(records []metricRecord, transaction string) (p50, p95, p99 float64, err error) {
-	for _, r := range records {
-		if r.Name != "tpcc_latency_ms" || r.Transaction != transaction || r.Status != "ok" {
-			continue
-		}
-		v, ferr := r.floatValue()
-		if ferr != nil {
-			return 0, 0, 0, ferr
-		}
-		switch r.Quantile {
-		case "p50":
-			p50 = v
-		case "p95":
-			p95 = v
-		case "p99":
-			p99 = v
-		}
-	}
-	return p50, p95, p99, nil
-}
-
 // pgVersionInfo returns (full version string, cpu_arch) parsed from a
 // pg_version metadata record, if present at this concurrency level. cpu_arch
 // is a substring match against the two architectures benchctl's driver
@@ -349,178 +374,96 @@ func orioledbVersionInfo(records []metricRecord) string {
 	return ""
 }
 
-// dbSizeInfoFrom returns the on-disk footprint parsed from a recordName
-// metadata record shaped like "db_bytes=2011349183,waldir_bytes=1077936128",
-// with a third "undo_bytes=..." pair on OrioleDB. It returns nil unless
-// db_bytes and waldir_bytes are both present and numeric, so a partial parse
-// never publishes a half-filled block. undo_bytes is optional: only OrioleDB
-// reports one.
-func dbSizeInfoFrom(records []metricRecord, recordName string) *dbSizeInfo {
+// metadataFrom passes a concurrency level's metadata records through by
+// name, so a new or changed benchctl record needs no change here. A metadata
+// record is any record without a transaction: every go-tpc measurement
+// carries one, metadata never does.
+//
+// A string value made only of "k=v" pairs separated by "," (e.g.
+// "db_bytes=1,waldir_bytes=2") becomes an object; any other string is kept
+// verbatim. A numeric value is nested under its direction and quantile
+// labels, when present. Two records landing on the same path are an error
+// rather than one silently overwriting the other.
+func metadataFrom(records []metricRecord) (map[string]any, error) {
+	metadata := map[string]any{}
 	for _, r := range records {
-		if r.Name != recordName {
+		if r.Transaction != "" {
 			continue
 		}
-		v, err := r.stringValue()
-		if err != nil {
-			continue
+		path := []string{r.Name}
+		for _, label := range []string{r.Direction, r.Quantile} {
+			if label != "" {
+				path = append(path, label)
+			}
 		}
-		return parseDBSize(v)
+		var value any
+		switch v := r.Value.(type) {
+		case string:
+			value = parseKeyValues(v)
+		default:
+			value = v
+		}
+		if err := setMetadataPath(metadata, path, value); err != nil {
+			return nil, err
+		}
 	}
+	return metadata, nil
+}
+
+// setMetadataPath stores value at path inside metadata, creating the
+// intermediate objects. It fails if any part of path is already taken.
+func setMetadataPath(metadata map[string]any, path []string, value any) error {
+	node := metadata
+	for i, key := range path[:len(path)-1] {
+		existing, ok := node[key]
+		if !ok {
+			child := map[string]any{}
+			node[key] = child
+			node = child
+			continue
+		}
+		child, ok := existing.(map[string]any)
+		if !ok {
+			return fmt.Errorf("metadata record %s: %s already holds a value", path[0], strings.Join(path[:i+1], "."))
+		}
+		node = child
+	}
+	last := path[len(path)-1]
+	if _, ok := node[last]; ok {
+		return fmt.Errorf("metadata record %s: duplicate value for %s", path[0], strings.Join(path, "."))
+	}
+	node[last] = value
 	return nil
 }
 
-// parseDBSize reads the "k=v,k=v" byte counts dbSizeInfoFrom expects.
-func parseDBSize(value string) *dbSizeInfo {
-	fields := map[string]int64{}
+// parseKeyValues turns "k=v, k=v" into an object, keeping numeric values as
+// numbers (verbatim, via json.Number, so e.g. "0.90" isn't reformatted). It
+// returns value unchanged unless every comma-separated part is a k=v pair.
+func parseKeyValues(value string) any {
+	fields := map[string]any{}
 	for _, part := range strings.Split(value, ",") {
 		key, raw, ok := strings.Cut(strings.TrimSpace(part), "=")
-		if !ok {
-			continue
+		key, raw = strings.TrimSpace(key), strings.TrimSpace(raw)
+		if !ok || key == "" {
+			return value
 		}
-		n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
-		if err != nil {
-			continue
+		if _, dup := fields[key]; dup {
+			return value
 		}
-		fields[strings.TrimSpace(key)] = n
-	}
-	for _, key := range []string{"db_bytes", "waldir_bytes"} {
-		if _, ok := fields[key]; !ok {
-			return nil
+		if isJSONNumber(raw) {
+			fields[key] = json.Number(raw)
+		} else {
+			fields[key] = raw
 		}
 	}
-	info := &dbSizeInfo{DBBytes: fields["db_bytes"], WALDirBytes: fields["waldir_bytes"]}
-	if undo, ok := fields["undo_bytes"]; ok {
-		info.UndoBytes = &undo
-	}
-	return info
+	return fields
 }
 
-// sizeBytesInfo returns the integer byte count from a recordName metadata
-// record shaped like "wal_bytes=1077881251", if present at this concurrency
-// level. nil when absent or malformed, matching
-// parseNetworkRTT's policy of never publishing a half-parsed value.
-func sizeBytesInfo(records []metricRecord, recordName string) *int64 {
-	for _, r := range records {
-		if r.Name != recordName {
-			continue
-		}
-		v, err := r.stringValue()
-		if err != nil {
-			continue
-		}
-		_, raw, ok := strings.Cut(v, "=")
-		if !ok {
-			continue
-		}
-		n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
-		if err != nil {
-			continue
-		}
-		return &n
+func isJSONNumber(s string) bool {
+	if s == "" || (s[0] != '-' && (s[0] < '0' || s[0] > '9')) {
+		return false
 	}
-	return nil
-}
-
-// networkRTTInfo returns the driver-to-target round trip parsed from a
-// network_rtt metadata record, if present at this concurrency level. A record
-// that is absent or malformed yields nil: runs made before the probe existed
-// have no such record, and one unreadable value shouldn't block publishing an
-// otherwise good Result.
-func networkRTTInfo(records []metricRecord) *networkInfo {
-	for _, r := range records {
-		if r.Name != "network_rtt" {
-			continue
-		}
-		v, err := r.stringValue()
-		if err != nil {
-			continue
-		}
-		return parseNetworkRTT(v)
-	}
-	return nil
-}
-
-// parseNetworkRTT reads benchctl's "min_us=96, median_us=154, p99_us=299,
-// max_us=337, samples=200" summary. It returns nil unless every field is
-// present and numeric, so a partial parse never publishes a half-filled block.
-func parseNetworkRTT(value string) *networkInfo {
-	fields := map[string]int64{}
-	for _, part := range strings.Split(value, ",") {
-		key, raw, ok := strings.Cut(strings.TrimSpace(part), "=")
-		if !ok {
-			continue
-		}
-		n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
-		if err != nil {
-			continue
-		}
-		fields[strings.TrimSpace(key)] = n
-	}
-	for _, key := range []string{"min_us", "median_us", "p99_us", "max_us", "samples"} {
-		if _, ok := fields[key]; !ok {
-			return nil
-		}
-	}
-	return &networkInfo{
-		RTTMinUs:    fields["min_us"],
-		RTTMedianUs: fields["median_us"],
-		RTTP99Us:    fields["p99_us"],
-		RTTMaxUs:    fields["max_us"],
-		Samples:     fields["samples"],
-	}
-}
-
-// driverQuantiles are the quantile label values benchctl's hostmetrics
-// package reports for driver_cpu_utilization and
-// driver_network_throughput_bytes_per_sec points, paired with the
-// percentileInfo field they fill.
-var driverQuantiles = map[string]func(*percentileInfo) *float64{
-	"0.99":   func(p *percentileInfo) *float64 { return &p.P99 },
-	"0.999":  func(p *percentileInfo) *float64 { return &p.P999 },
-	"0.9999": func(p *percentileInfo) *float64 { return &p.P9999 },
-}
-
-// loadDriverInfoFrom returns the load driver's host CPU/network metrics
-// parsed from driver_cpu_utilization/driver_network_throughput_bytes_per_sec
-// records at this concurrency level, if present. Like networkRTTInfo, it
-// returns nil unless every quantile (and, for network, both directions) is
-// present, so a partial parse never publishes a half-filled block.
-func loadDriverInfoFrom(records []metricRecord) *loadDriverInfo {
-	var info loadDriverInfo
-	seenCPU := map[string]bool{}
-	seenNetwork := map[string]bool{}
-	for _, r := range records {
-		setPercentile, ok := driverQuantiles[r.Quantile]
-		if !ok {
-			continue
-		}
-		switch r.Name {
-		case "driver_cpu_utilization":
-			v, err := r.floatValue()
-			if err != nil {
-				continue
-			}
-			*setPercentile(&info.CPUUtilization) = v
-			seenCPU[r.Quantile] = true
-		case "driver_network_throughput_bytes_per_sec":
-			v, err := r.floatValue()
-			if err != nil {
-				continue
-			}
-			switch r.Direction {
-			case "receive":
-				*setPercentile(&info.NetworkThroughputBytesPerSec.Receive) = v
-				seenNetwork["receive/"+r.Quantile] = true
-			case "transmit":
-				*setPercentile(&info.NetworkThroughputBytesPerSec.Transmit) = v
-				seenNetwork["transmit/"+r.Quantile] = true
-			}
-		}
-	}
-	if len(seenCPU) != len(driverQuantiles) || len(seenNetwork) != 2*len(driverQuantiles) {
-		return nil
-	}
-	return &info
+	return json.Valid([]byte(s))
 }
 
 // toolVersionInfo returns (benchctl_version, gotpc_version) from a

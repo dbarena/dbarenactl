@@ -34,9 +34,9 @@ type instanceInfo struct {
 	CPUArch        *string  `json:"cpu_arch"`
 	EngineVersion  *string  `json:"engine_version"`
 	// PgSettings and OrioleDBVersion are omitempty (rather than the
-	// explicit-null convention above) because, like sweepPointJSON.Network,
-	// they're metadata benchctl only started emitting after older runs
-	// already existed -- absent means "not captured", not "unknown".
+	// explicit-null convention above) because they're metadata
+	// benchctl only started emitting after older runs already existed --
+	// absent means "not captured", not "unknown".
 	PgSettings      *string `json:"pg_settings,omitempty"`
 	OrioleDBVersion *string `json:"orioledb_version,omitempty"`
 }
@@ -71,33 +71,21 @@ type costComponentJSON struct {
 	Detail    string  `json:"detail"`
 }
 
+// iterationEntry is one run's measurement at one concurrency level. Every
+// run carries its full data; Median marks the one whose figures are reported
+// for this concurrency level.
 type iterationEntry struct {
-	Iteration      int     `json:"iteration"`
-	StartedAt      string  `json:"started_at"`
-	CompletedAt    string  `json:"completed_at"`
-	Throughput     float64 `json:"throughput"`
-	RawMetricsFile *string `json:"raw_metrics_file"`
-	Notes          *string `json:"notes,omitempty"`
-}
-
-type throughputInfo struct {
-	Metric      string  `json:"metric"`
-	Unit        string  `json:"unit"`
-	Transaction *string `json:"transaction"`
-	Value       float64 `json:"value"`
-}
-
-type latencyInfo struct {
-	Transaction *string `json:"transaction"`
-	P50         float64 `json:"p50"`
-	P95         float64 `json:"p95"`
-	P99         float64 `json:"p99"`
-}
-
-type summaryInfo struct {
-	Throughput        throughputInfo `json:"throughput"`
-	LatencyMs         latencyInfo    `json:"latency_ms"`
-	TpmPerDollarMonth *float64       `json:"tpm_per_dollar_month"`
+	Iteration         int              `json:"iteration"`
+	Median            bool             `json:"median"`
+	StartedAt         string           `json:"started_at"`
+	CompletedAt       string           `json:"completed_at"`
+	TpmPerDollarMonth *float64         `json:"tpm_per_dollar_month"`
+	WorkloadMetrics   *workloadMetrics `json:"workload_metrics"`
+	// Metadata passes benchctl's metadata records through by name (see
+	// metadataFrom), so a new or changed record needs no change here.
+	Metadata       map[string]any `json:"metadata"`
+	RawMetricsFile *string        `json:"raw_metrics_file"`
+	Notes          *string        `json:"notes,omitempty"`
 }
 
 type txnLatencyInfo struct {
@@ -121,69 +109,13 @@ type workloadMetrics struct {
 	Errors       map[string]float64    `json:"errors,omitempty"`
 }
 
+// sweepPointJSON is one concurrency level. Peak marks the level whose median
+// tpm is highest across the sweep (see selectRuns).
 type sweepPointJSON struct {
-	Concurrency        int             `json:"concurrency"`
-	WorkloadParameters map[string]any  `json:"workload_parameters,omitempty"`
-	Network            *networkInfo    `json:"network,omitempty"`
-	LoadDriver         *loadDriverInfo `json:"load_driver,omitempty"`
-	// DBSize*/WALSize* are measured immediately before/after this
-	// concurrency level ran. omitempty for the same reason as Network:
-	// absent for Results published before this measurement existed.
-	DBSizeBefore    *dbSizeInfo      `json:"db_size_before,omitempty"`
-	DBSizeAfter     *dbSizeInfo      `json:"db_size_after,omitempty"`
-	WALSizeBefore   *int64           `json:"wal_size_before,omitempty"`
-	WALSizeAfter    *int64           `json:"wal_size_after,omitempty"`
-	Iterations      []iterationEntry `json:"iterations"`
-	Summary         summaryInfo      `json:"summary"`
-	WorkloadMetrics *workloadMetrics `json:"workload_metrics,omitempty"`
-}
-
-// dbSizeInfo is the target's on-disk footprint broken out by component. The
-// components stay separate rather than summed because only DBBytes says how
-// much of the dataset there is to keep resident: WAL and undo are churn, and a
-// combined figure hides a large one of either behind a plausible total.
-//
-// Results published before the split carry a single summed total_bytes
-// instead. dbarenactl only ever writes Results, never reads them back, so that
-// older shape has no field here.
-type dbSizeInfo struct {
-	DBBytes     int64  `json:"db_bytes"`
-	WALDirBytes int64  `json:"waldir_bytes"`
-	UndoBytes   *int64 `json:"undo_bytes,omitempty"` // OrioleDB only
-}
-
-// networkInfo is the driver-to-target round trip measured just before this
-// concurrency level ran. It describes the path between the load driver and the
-// database, not the database hardware, which is why it sits here rather than in
-// instance. Omitted for runs made before the probe existed.
-type networkInfo struct {
-	RTTMinUs    int64 `json:"rtt_min_us"`
-	RTTMedianUs int64 `json:"rtt_median_us"`
-	RTTP99Us    int64 `json:"rtt_p99_us"`
-	RTTMaxUs    int64 `json:"rtt_max_us"`
-	Samples     int64 `json:"samples"`
-}
-
-// percentileInfo is the p99/p99.9/p99.99 breakdown benchctl's hostmetrics
-// package reports for a single driver host metric.
-type percentileInfo struct {
-	P99   float64 `json:"p99"`
-	P999  float64 `json:"p99_9"`
-	P9999 float64 `json:"p99_99"`
-}
-
-type networkThroughputInfo struct {
-	Receive  percentileInfo `json:"receive"`
-	Transmit percentileInfo `json:"transmit"`
-}
-
-// loadDriverInfo is the load driver's own host metrics (CPU, network),
-// captured via Vector while this concurrency level ran. Like networkInfo,
-// it's omitted for runs made before this capture existed, or where
-// metrics_enabled was false.
-type loadDriverInfo struct {
-	CPUUtilization               percentileInfo        `json:"cpu_utilization"`
-	NetworkThroughputBytesPerSec networkThroughputInfo `json:"network_throughput_bytes_per_sec"`
+	Concurrency        int              `json:"concurrency"`
+	Peak               bool             `json:"peak"`
+	WorkloadParameters map[string]any   `json:"workload_parameters,omitempty"`
+	Iterations         []iterationEntry `json:"iterations"`
 }
 
 func strPtr(s string) *string {

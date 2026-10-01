@@ -190,7 +190,7 @@ func TestComputePricing_PopulatesComponentsSummingToMonthlyUSD(t *testing.T) {
 	}
 	diskGB, iops, throughput := 20.0, 3000.0, 125.0
 	pi := pricingInputs{instanceType: "db.t4g.small", diskGB: &diskGB, iops: &iops, throughputMbps: &throughput}
-	points := []sweepPointJSON{{Summary: summaryInfo{Throughput: throughputInfo{Value: 1000}}}}
+	points := []sweepPointJSON{{Iterations: []iterationEntry{{WorkloadMetrics: &workloadMetrics{Transactions: map[string]txnMetrics{"NEW_ORDER": {Tpm: 1000}}}}}}}
 
 	out, err := computePricing(snapshot, "aws/rds", pi, "cache-fit-small", points)
 	if err != nil {
@@ -220,8 +220,8 @@ func TestComputePricing_PopulatesComponentsSummingToMonthlyUSD(t *testing.T) {
 	if math.Abs(gotTotal-out.MonthlyUSD) > 1e-9 {
 		t.Errorf("sum(Components.AmountUSD) = %v, want MonthlyUSD %v", gotTotal, out.MonthlyUSD)
 	}
-	if points[0].Summary.TpmPerDollarMonth == nil {
-		t.Error("TpmPerDollarMonth not backfilled onto sweep point")
+	if points[0].Iterations[0].TpmPerDollarMonth == nil {
+		t.Error("TpmPerDollarMonth not backfilled onto iteration")
 	}
 
 	data, err := json.Marshal(out)
@@ -253,16 +253,16 @@ func TestComputePricing_RoundsTpmPerDollarMonth(t *testing.T) {
 	}
 	diskGB, iops, throughput := 20.0, 3000.0, 125.0
 	pi := pricingInputs{instanceType: "db.t4g.small", diskGB: &diskGB, iops: &iops, throughputMbps: &throughput}
-	points := []sweepPointJSON{{Summary: summaryInfo{Throughput: throughputInfo{Value: 1000}}}}
+	points := []sweepPointJSON{{Iterations: []iterationEntry{{WorkloadMetrics: &workloadMetrics{Transactions: map[string]txnMetrics{"NEW_ORDER": {Tpm: 1000}}}}}}}
 
 	out, err := computePricing(snapshot, "aws/rds", pi, "cache-fit-small", points)
 	if err != nil {
 		t.Fatalf("computePricing: %v", err)
 	}
 
-	got := points[0].Summary.TpmPerDollarMonth
+	got := points[0].Iterations[0].TpmPerDollarMonth
 	if got == nil {
-		t.Fatal("TpmPerDollarMonth not backfilled onto sweep point")
+		t.Fatal("TpmPerDollarMonth not backfilled onto iteration")
 	}
 	want := pricing.RoundTo(1000/out.MonthlyUSD, 2)
 	if *got != want {
@@ -329,8 +329,8 @@ func TestBuildInstanceInfo_OmitsPgSettingsAndOrioleDBVersionWhenAbsent(t *testin
 // ---- buildResultDoc + raw-clients CSV, end to end from on-disk artifacts ----
 
 // newOrderMetricRecords builds the metricRecord set one candidate run needs
-// at a given concurrency: just enough for tpmAt/latencyFor/buildTxnMetrics
-// to succeed without error (only NEW_ORDER is populated).
+// at a given concurrency: just enough for tpmAt/buildTxnMetrics to succeed
+// without error (only NEW_ORDER is populated).
 func newOrderMetricRecords(threads string, tpm float64, benchctlVersion, gotpcVersion string) []metricRecord {
 	records := []metricRecord{
 		{FixtureThreads: threads, Name: "tpcc_tpm", Transaction: "NEW_ORDER", Status: "ok", Value: tpm},
@@ -386,6 +386,10 @@ func makeCandidateRun(t *testing.T, dir, runID string, iteration int, threads st
 	if err != nil {
 		t.Fatalf("loadRunMetrics(%s): %v", runDir, err)
 	}
+	stepWindows, err := loadStepWindows(runDir)
+	if err != nil {
+		t.Fatalf("loadStepWindows(%s): %v", runDir, err)
+	}
 
 	now := time.Now().UTC()
 	return candidateRun{
@@ -399,38 +403,58 @@ func makeCandidateRun(t *testing.T, dir, runID string, iteration int, threads st
 		},
 		metricsByThreads:    metrics,
 		rawSamplesByThreads: rawSamples,
+		stepWindows:         stepWindows,
 	}
 }
 
-// TestBuildResultDoc_RawClientsCSV_SelectedIterationOnly is the end-to-end
-// check for the whole feature: three candidate runs at the same
-// concurrency with different NEW_ORDER tpm (1000/1500/2000) go in,
-// selectRepresentativeRun must pick the median (1500), and only that
-// iteration should get a raw-clients-<n>.csv + a non-nil raw_metrics_file
-// -- matching selectRepresentativeRun's "no pooling/intermingling across a
-// test point's independent iterations" policy.
-func TestBuildResultDoc_RawClientsCSV_SelectedIterationOnly(t *testing.T) {
-	dir := t.TempDir()
-	candidates := []candidateRun{
-		makeCandidateRun(t, dir, "run-a", 1, "12", 1000.0, "1.2.0+20260727-abc1234", "latest-20-geb6de81"),
-		makeCandidateRun(t, dir, "run-b", 2, "12", 1500.0, "1.2.0+20260727-abc1234", "latest-20-geb6de81"),
-		makeCandidateRun(t, dir, "run-c", 3, "12", 2000.0, "1.2.0+20260727-abc1234", "latest-20-geb6de81"),
-	}
-
-	m := &manifest.Manifest{Provider: "AWS", Workload: "tpcc"}
-	tp := &sweepstate.TestPoint{Tier: "medium", BoundType: "compute", SweepID: "sweep-1"}
-	def := &manifest.TestPointDef{Tier: "medium", BoundType: "compute", Set: map[string]string{"warehouses": "28"}}
-
-	scenarioDir := filepath.Join(dir, "scenario")
+// buildTestDoc runs buildResultDoc for candidates with a minimal manifest and
+// test point, writing CSVs into scenarioDir.
+func buildTestDoc(t *testing.T, candidates []candidateRun, scenarioDir string) *resultDoc {
+	t.Helper()
 	if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
 		t.Fatalf("mkdir scenarioDir: %v", err)
 	}
-
-	doc, err := buildResultDoc(resultDocInputs{Manifest: m, TestPoint: tp, Def: def, Successful: candidates, ManifestPath: "candidate.yaml", ScenarioDir: scenarioDir})
+	doc, err := buildResultDoc(resultDocInputs{
+		Manifest:     &manifest.Manifest{Provider: "AWS", Workload: "tpcc"},
+		TestPoint:    &sweepstate.TestPoint{Tier: "medium", BoundType: "compute", SweepID: "sweep-1"},
+		Def:          &manifest.TestPointDef{Tier: "medium", BoundType: "compute", Set: map[string]string{"warehouses": "28"}},
+		Successful:   candidates,
+		ManifestPath: "candidate.yaml",
+		ScenarioDir:  scenarioDir,
+	})
 	if err != nil {
 		t.Fatalf("buildResultDoc: %v", err)
 	}
+	return doc
+}
 
+// newOrderTpm returns an iteration's NEW_ORDER tpm.
+func newOrderTpm(it iterationEntry) float64 {
+	return it.WorkloadMetrics.Transactions["NEW_ORDER"].Tpm
+}
+
+// TestBuildResultDoc_MarksPeakAndMedianAndWritesEveryCSV is the end-to-end
+// check: three runs at two concurrency levels go in. Every level marks its
+// median run, the level with the highest median is the peak, and every run
+// at every level gets its own raw-clients CSV.
+func TestBuildResultDoc_MarksPeakAndMedianAndWritesEveryCSV(t *testing.T) {
+	dir := t.TempDir()
+	tpm := map[string]map[string]float64{
+		"run-a": {"6": 900, "12": 1000},
+		"run-b": {"6": 800, "12": 1500},
+		"run-c": {"6": 700, "12": 2000},
+	}
+	var candidates []candidateRun
+	for i, runID := range []string{"run-a", "run-b", "run-c"} {
+		makeCandidateRun(t, dir, runID, i+1, "6", tpm[runID]["6"], "1.2.0+20260727-abc1234", "latest-20-geb6de81")
+		candidates = append(candidates, makeCandidateRun(t, dir, runID, i+1, "12", tpm[runID]["12"], "1.2.0+20260727-abc1234", "latest-20-geb6de81"))
+	}
+	scenarioDir := filepath.Join(dir, "scenario")
+	doc := buildTestDoc(t, candidates, scenarioDir)
+
+	if doc.SchemaVersion != "2.0.0" {
+		t.Errorf("schema_version = %q, want 2.0.0", doc.SchemaVersion)
+	}
 	if got := doc.Reproducibility.BenchctlVersion; got == nil || *got != "1.2.0+20260727-abc1234" {
 		t.Errorf("reproducibility.benchctl_version = %v, want %q", got, "1.2.0+20260727-abc1234")
 	}
@@ -441,44 +465,41 @@ func TestBuildResultDoc_RawClientsCSV_SelectedIterationOnly(t *testing.T) {
 		t.Errorf("reproducibility.dbarenactl_version = %v, want %q", got, version)
 	}
 
-	if len(doc.Sweep) != 1 {
-		t.Fatalf("want 1 sweep point (concurrency 12), got %d", len(doc.Sweep))
+	if len(doc.Sweep) != 2 {
+		t.Fatalf("want 2 sweep points (concurrency 6 and 12), got %d", len(doc.Sweep))
 	}
-	sp := doc.Sweep[0]
-	if sp.Concurrency != 12 {
-		t.Fatalf("concurrency = %d, want 12", sp.Concurrency)
-	}
-	if sp.Summary.Throughput.Value != 1500 {
-		t.Errorf("summary throughput = %v, want 1500 (the median)", sp.Summary.Throughput.Value)
-	}
-
-	if len(sp.Iterations) != 3 {
-		t.Fatalf("want 3 iterations, got %d", len(sp.Iterations))
-	}
-	var selectedRawFile *string
-	for _, it := range sp.Iterations {
-		if it.Throughput == 1500 {
-			selectedRawFile = it.RawMetricsFile
-			continue
+	wantMedian := map[int]float64{6: 800, 12: 1500}
+	for _, sp := range doc.Sweep {
+		if want := sp.Concurrency == 12; sp.Peak != want {
+			t.Errorf("concurrency %d: peak = %v, want %v", sp.Concurrency, sp.Peak, want)
 		}
-		if it.RawMetricsFile != nil {
-			t.Errorf("non-selected iteration (throughput=%v) has raw_metrics_file = %v, want nil", it.Throughput, *it.RawMetricsFile)
+		if len(sp.Iterations) != 3 {
+			t.Fatalf("concurrency %d: want 3 iterations, got %d", sp.Concurrency, len(sp.Iterations))
 		}
-	}
-	if selectedRawFile == nil {
-		t.Fatal("selected iteration (throughput=1500) has raw_metrics_file = nil, want set")
-	}
-	if *selectedRawFile != "raw-clients-12.csv" {
-		t.Errorf("selected iteration raw_metrics_file = %q, want %q", *selectedRawFile, "raw-clients-12.csv")
-	}
-
-	csvPath := filepath.Join(scenarioDir, "raw-clients-12.csv")
-	rows := readCSVRows(t, csvPath)
-	if len(rows) != 3 { // header + 2 ticks
-		t.Fatalf("want 3 rows (header+2 ticks), got %d: %v", len(rows), rows)
-	}
-	if rows[1][1] != "1500.0" {
-		t.Errorf("raw-clients-12.csv row[1].new_order_tpm = %q, want %q (run-b's data, not run-a/run-c's)", rows[1][1], "1500.0")
+		medians := 0
+		for _, it := range sp.Iterations {
+			if it.Median {
+				medians++
+				if got := newOrderTpm(it); got != wantMedian[sp.Concurrency] {
+					t.Errorf("concurrency %d: median run tpm = %v, want %v", sp.Concurrency, got, wantMedian[sp.Concurrency])
+				}
+			}
+			wantFile := fmt.Sprintf("raw-clients-%d-iteration-%d.csv", sp.Concurrency, it.Iteration)
+			if it.RawMetricsFile == nil || *it.RawMetricsFile != wantFile {
+				t.Errorf("concurrency %d iteration %d: raw_metrics_file = %v, want %q", sp.Concurrency, it.Iteration, it.RawMetricsFile, wantFile)
+				continue
+			}
+			rows := readCSVRows(t, filepath.Join(scenarioDir, wantFile))
+			if len(rows) != 3 { // header + 2 ticks
+				t.Fatalf("%s: want 3 rows (header+2 ticks), got %d: %v", wantFile, len(rows), rows)
+			}
+			if want := fmt.Sprintf("%.1f", newOrderTpm(it)); rows[1][1] != want {
+				t.Errorf("%s row[1].new_order_tpm = %q, want %q (this run's own data)", wantFile, rows[1][1], want)
+			}
+		}
+		if medians != 1 {
+			t.Errorf("concurrency %d: %d median runs, want exactly 1", sp.Concurrency, medians)
+		}
 	}
 }
 
@@ -490,18 +511,10 @@ func TestBuildResultDoc_RawClientsCSV_Idempotent(t *testing.T) {
 	candidates := []candidateRun{
 		makeCandidateRun(t, dir, "run-a", 1, "12", 1500.0, "", ""),
 	}
-	m := &manifest.Manifest{Provider: "AWS", Workload: "tpcc"}
-	tp := &sweepstate.TestPoint{Tier: "medium", BoundType: "compute", SweepID: "sweep-1"}
-	def := &manifest.TestPointDef{Tier: "medium", BoundType: "compute", Set: map[string]string{"warehouses": "28"}}
 	scenarioDir := filepath.Join(dir, "scenario")
-	if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
-		t.Fatalf("mkdir scenarioDir: %v", err)
-	}
+	csvPath := filepath.Join(scenarioDir, "raw-clients-12-iteration-1.csv")
 
-	firstDoc, err := buildResultDoc(resultDocInputs{Manifest: m, TestPoint: tp, Def: def, Successful: candidates, ManifestPath: "candidate.yaml", ScenarioDir: scenarioDir})
-	if err != nil {
-		t.Fatalf("buildResultDoc (1st): %v", err)
-	}
+	firstDoc := buildTestDoc(t, candidates, scenarioDir)
 	// Records with no benchctl_version/gotpc_version (a run predating
 	// benchctl's version-metadata feature) must leave these null, not "".
 	if firstDoc.Reproducibility.BenchctlVersion != nil {
@@ -515,14 +528,12 @@ func TestBuildResultDoc_RawClientsCSV_Idempotent(t *testing.T) {
 	if got := firstDoc.Reproducibility.DbarenactlVersion; got == nil || *got != version {
 		t.Errorf("reproducibility.dbarenactl_version = %v, want %q", got, version)
 	}
-	first, err := os.ReadFile(filepath.Join(scenarioDir, "raw-clients-12.csv"))
+	first, err := os.ReadFile(csvPath)
 	if err != nil {
 		t.Fatalf("read first output: %v", err)
 	}
-	if _, err := buildResultDoc(resultDocInputs{Manifest: m, TestPoint: tp, Def: def, Successful: candidates, ManifestPath: "candidate.yaml", ScenarioDir: scenarioDir}); err != nil {
-		t.Fatalf("buildResultDoc (2nd): %v", err)
-	}
-	second, err := os.ReadFile(filepath.Join(scenarioDir, "raw-clients-12.csv"))
+	buildTestDoc(t, candidates, scenarioDir)
+	second, err := os.ReadFile(csvPath)
 	if err != nil {
 		t.Fatalf("read second output: %v", err)
 	}
@@ -531,61 +542,29 @@ func TestBuildResultDoc_RawClientsCSV_Idempotent(t *testing.T) {
 	}
 }
 
-// TestBuildResultDoc_RawClientsCSV_OnlyAtMaxConcurrency guards the sweep-wide
-// policy: a raw-clients CSV (and its raw_metrics_file reference) is only
-// produced at a sweep's maximum concurrency level, even though every
-// concurrency level's selected iteration carries the "used for
-// summary/workload_metrics" notes text.
-func TestBuildResultDoc_RawClientsCSV_OnlyAtMaxConcurrency(t *testing.T) {
+// TestBuildResultDoc_TimestampsComeFromStepWindows covers both sources of an
+// iteration's started_at/completed_at: the benchmark step in
+// step_windows.json when the run has one, the run's span otherwise.
+func TestBuildResultDoc_TimestampsComeFromStepWindows(t *testing.T) {
 	dir := t.TempDir()
-	makeCandidateRun(t, dir, "run-a", 1, "6", 800.0, "", "")
-	candidate := makeCandidateRun(t, dir, "run-a", 1, "12", 1500.0, "", "")
-	candidates := []candidateRun{candidate}
-
-	m := &manifest.Manifest{Provider: "AWS", Workload: "tpcc"}
-	tp := &sweepstate.TestPoint{Tier: "medium", BoundType: "compute", SweepID: "sweep-1"}
-	def := &manifest.TestPointDef{Tier: "medium", BoundType: "compute", Set: map[string]string{"warehouses": "28"}}
-
-	scenarioDir := filepath.Join(dir, "scenario")
-	if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
-		t.Fatalf("mkdir scenarioDir: %v", err)
+	windows := `[{"step": "benchmark", "fixture": {"client_threads": "12"}, "started_at": "2026-09-30T14:03:35.87Z", "ended_at": "2026-09-30T15:03:37.36Z"}]`
+	if err := os.MkdirAll(filepath.Join(dir, "run-a"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "run-a", "step_windows.json"), []byte(windows), 0o644); err != nil {
+		t.Fatalf("write step_windows.json: %v", err)
+	}
+	withWindows := makeCandidateRun(t, dir, "run-a", 1, "12", 1500.0, "", "")
+	withoutWindows := makeCandidateRun(t, dir, "run-b", 2, "12", 1600.0, "", "")
 
-	doc, err := buildResultDoc(resultDocInputs{Manifest: m, TestPoint: tp, Def: def, Successful: candidates, ManifestPath: "candidate.yaml", ScenarioDir: scenarioDir})
-	if err != nil {
-		t.Fatalf("buildResultDoc: %v", err)
+	doc := buildTestDoc(t, []candidateRun{withWindows, withoutWindows}, filepath.Join(dir, "scenario"))
+	its := doc.Sweep[0].Iterations
+	if its[0].StartedAt != "2026-09-30T14:03:35Z" || its[0].CompletedAt != "2026-09-30T15:03:37Z" {
+		t.Errorf("iteration 1 = %s..%s, want the benchmark step window", its[0].StartedAt, its[0].CompletedAt)
 	}
-
-	if len(doc.Sweep) != 2 {
-		t.Fatalf("want 2 sweep points (concurrency 6 and 12), got %d", len(doc.Sweep))
-	}
-	for _, sp := range doc.Sweep {
-		if len(sp.Iterations) != 1 {
-			t.Fatalf("concurrency %d: want 1 iteration, got %d", sp.Concurrency, len(sp.Iterations))
-		}
-		it := sp.Iterations[0]
-		if it.Notes == nil || !strings.Contains(*it.Notes, "used for summary/workload_metrics below") {
-			t.Errorf("concurrency %d: notes = %v, want the summary/workload_metrics text regardless of concurrency", sp.Concurrency, it.Notes)
-		}
-		switch sp.Concurrency {
-		case 6:
-			if it.RawMetricsFile != nil {
-				t.Errorf("concurrency 6 (non-max): raw_metrics_file = %v, want nil", *it.RawMetricsFile)
-			}
-		case 12:
-			if it.RawMetricsFile == nil || *it.RawMetricsFile != "raw-clients-12.csv" {
-				t.Errorf("concurrency 12 (max): raw_metrics_file = %v, want %q", it.RawMetricsFile, "raw-clients-12.csv")
-			}
-		default:
-			t.Fatalf("unexpected concurrency %d", sp.Concurrency)
-		}
-	}
-
-	if _, err := os.Stat(filepath.Join(scenarioDir, "raw-clients-6.csv")); !os.IsNotExist(err) {
-		t.Errorf("raw-clients-6.csv: stat err = %v, want IsNotExist", err)
-	}
-	if _, err := os.Stat(filepath.Join(scenarioDir, "raw-clients-12.csv")); err != nil {
-		t.Errorf("raw-clients-12.csv: stat err = %v, want nil", err)
+	wantStart := withoutWindows.run.CreatedAt.UTC().Format(time.RFC3339)
+	if its[1].StartedAt != wantStart {
+		t.Errorf("iteration 2 started_at = %s, want the run's span %s", its[1].StartedAt, wantStart)
 	}
 }
 
@@ -613,116 +592,29 @@ func TestToolVersionInfo(t *testing.T) {
 	}
 }
 
-func TestParseNetworkRTT_BenchctlFormat(t *testing.T) {
-	got := parseNetworkRTT("min_us=96, median_us=154, p99_us=299, max_us=337, samples=200")
-	if got == nil {
-		t.Fatal("parseNetworkRTT returned nil for a well-formed value")
-	}
-	want := networkInfo{RTTMinUs: 96, RTTMedianUs: 154, RTTP99Us: 299, RTTMaxUs: 337, Samples: 200}
-	if *got != want {
-		t.Errorf("parseNetworkRTT = %+v, want %+v", *got, want)
-	}
-}
-
-func TestParseNetworkRTT_RejectsIncompleteValues(t *testing.T) {
-	// A half-filled block is worse than none: it reads as a measurement.
-	for _, value := range []string{
-		"",
-		"samples=0",
-		"min_us=96, median_us=154, p99_us=299, samples=200", // no max_us
-		"min_us=nope, median_us=154, p99_us=299, max_us=337, samples=200",
-	} {
-		if got := parseNetworkRTT(value); got != nil {
-			t.Errorf("parseNetworkRTT(%q) = %+v, want nil", value, *got)
-		}
-	}
-}
-
-func TestNetworkRTTInfo_AbsentRecordYieldsNil(t *testing.T) {
-	records := newOrderMetricRecords("8", 1000, "v1", "v2")
-	if got := networkRTTInfo(records); got != nil {
-		t.Errorf("networkRTTInfo = %+v, want nil for records predating the probe", *got)
-	}
-}
-
-func TestNetworkRTTInfo_ReadsTheMetadataRecord(t *testing.T) {
-	records := append(newOrderMetricRecords("8", 1000, "v1", "v2"),
-		metricRecord{FixtureThreads: "8", Name: "network_rtt",
-			Value: "min_us=96, median_us=154, p99_us=299, max_us=337, samples=200"})
-	got := networkRTTInfo(records)
-	if got == nil {
-		t.Fatal("networkRTTInfo returned nil despite a network_rtt record")
-	}
-	if got.RTTMedianUs != 154 {
-		t.Errorf("RTTMedianUs = %d, want 154", got.RTTMedianUs)
-	}
-}
-
-func TestBuildResultDoc_CarriesNetworkRTTIntoTheSweepPoint(t *testing.T) {
+// TestBuildResultDoc_CarriesMetadataIntoEveryIteration checks that metadata
+// records reach each run's iteration, keyed by record name.
+func TestBuildResultDoc_CarriesMetadataIntoEveryIteration(t *testing.T) {
 	dir := t.TempDir()
 	rtt := metricRecord{FixtureThreads: "12", Name: "network_rtt",
 		Value: "min_us=96, median_us=154, p99_us=299, max_us=337, samples=200"}
 	candidates := []candidateRun{
 		makeCandidateRun(t, dir, "run-a", 1, "12", 1500.0, "1.2.0", "latest", rtt),
+		makeCandidateRun(t, dir, "run-b", 2, "12", 1600.0, "1.2.0", "latest"),
 	}
-	scenarioDir := filepath.Join(dir, "scenario")
-	if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
-		t.Fatalf("mkdir scenarioDir: %v", err)
-	}
+	doc := buildTestDoc(t, candidates, filepath.Join(dir, "scenario"))
 
-	doc, err := buildResultDoc(resultDocInputs{
-		Manifest:     &manifest.Manifest{Provider: "AWS", Workload: "tpcc"},
-		TestPoint:    &sweepstate.TestPoint{Tier: "medium", BoundType: "compute", SweepID: "sweep-1"},
-		Def:          &manifest.TestPointDef{Tier: "medium", BoundType: "compute"},
-		Successful:   candidates,
-		ManifestPath: "candidate.yaml",
-		ScenarioDir:  scenarioDir,
-	})
+	its := doc.Sweep[0].Iterations
+	blob, err := json.Marshal(its[0].Metadata)
 	if err != nil {
-		t.Fatalf("buildResultDoc: %v", err)
+		t.Fatalf("marshal metadata: %v", err)
 	}
-	if len(doc.Sweep) != 1 {
-		t.Fatalf("want 1 sweep point, got %d", len(doc.Sweep))
+	want := `{"network_rtt":{"max_us":337,"median_us":154,"min_us":96,"p99_us":299,"samples":200}}`
+	if string(blob) != want {
+		t.Errorf("iteration 1 metadata = %s, want %s", blob, want)
 	}
-	got := doc.Sweep[0].Network
-	if got == nil {
-		t.Fatal("sweep[0].network = nil, want the probe's figures")
-	}
-	want := networkInfo{RTTMinUs: 96, RTTMedianUs: 154, RTTP99Us: 299, RTTMaxUs: 337, Samples: 200}
-	if *got != want {
-		t.Errorf("sweep[0].network = %+v, want %+v", *got, want)
-	}
-}
-
-func TestBuildResultDoc_OmitsNetworkWhenTheRunPredatesTheProbe(t *testing.T) {
-	dir := t.TempDir()
-	candidates := []candidateRun{makeCandidateRun(t, dir, "run-a", 1, "12", 1500.0, "1.2.0", "latest")}
-	scenarioDir := filepath.Join(dir, "scenario")
-	if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
-		t.Fatalf("mkdir scenarioDir: %v", err)
-	}
-
-	doc, err := buildResultDoc(resultDocInputs{
-		Manifest:     &manifest.Manifest{Provider: "AWS", Workload: "tpcc"},
-		TestPoint:    &sweepstate.TestPoint{Tier: "medium", BoundType: "compute", SweepID: "sweep-1"},
-		Def:          &manifest.TestPointDef{Tier: "medium", BoundType: "compute"},
-		Successful:   candidates,
-		ManifestPath: "candidate.yaml",
-		ScenarioDir:  scenarioDir,
-	})
-	if err != nil {
-		t.Fatalf("buildResultDoc: %v", err)
-	}
-	if got := doc.Sweep[0].Network; got != nil {
-		t.Errorf("sweep[0].network = %+v, want nil", *got)
-	}
-	// omitempty must keep the key out of the JSON entirely, not emit a null.
-	blob, err := json.Marshal(doc.Sweep[0])
-	if err != nil {
-		t.Fatalf("marshal sweep point: %v", err)
-	}
-	if strings.Contains(string(blob), "\"network\"") {
-		t.Errorf("sweep point JSON should omit the network key, got: %s", blob)
+	if len(its[1].Metadata) != 0 {
+		t.Errorf("iteration 2 metadata = %v, want empty for a run without metadata records", its[1].Metadata)
 	}
 }
 
@@ -751,93 +643,14 @@ func TestOrioledbVersionInfo(t *testing.T) {
 	}
 }
 
-func TestSizeBytesInfo(t *testing.T) {
-	records := newOrderMetricRecords("8", 1000, "v1", "v2")
-	if got := sizeBytesInfo(records, "wal_size_before"); got != nil {
-		t.Errorf("sizeBytesInfo = %v, want nil for records with no matching row", *got)
-	}
-
-	records = append(records,
-		metricRecord{FixtureThreads: "8", Name: "wal_size_before", Value: "wal_bytes=863871697"},
-		metricRecord{FixtureThreads: "8", Name: "wal_size_after", Value: "wal_bytes=1077881251"},
-		metricRecord{FixtureThreads: "8", Name: "malformed_size", Value: "wal_bytes=not-a-number"},
-	)
-	cases := []struct {
-		recordName string
-		want       int64
-	}{
-		{"wal_size_before", 863871697},
-		{"wal_size_after", 1077881251},
-	}
-	for _, c := range cases {
-		got := sizeBytesInfo(records, c.recordName)
-		if got == nil || *got != c.want {
-			t.Errorf("sizeBytesInfo(%q) = %v, want %d", c.recordName, got, c.want)
-		}
-	}
-	if got := sizeBytesInfo(records, "malformed_size"); got != nil {
-		t.Errorf("sizeBytesInfo(malformed_size) = %v, want nil for a non-numeric value", *got)
-	}
-}
-
-// TestDBSizeInfoFrom covers the split db_size_* record: the two-component
-// form every engine reports, OrioleDB's third undo component, and the
-// malformed inputs that must yield nil rather than a half-filled block.
-func TestDBSizeInfoFrom(t *testing.T) {
-	records := newOrderMetricRecords("8", 1000, "v1", "v2")
-	if got := dbSizeInfoFrom(records, "db_size_before"); got != nil {
-		t.Errorf("dbSizeInfoFrom = %v, want nil for records with no matching row", *got)
-	}
-
-	records = append(records,
-		metricRecord{FixtureThreads: "8", Name: "db_size_before", Value: "db_bytes=2011349183,waldir_bytes=1077936128"},
-		metricRecord{FixtureThreads: "8", Name: "db_size_after", Value: "db_bytes=2330599835,waldir_bytes=2147483648,undo_bytes=33554432"},
-		metricRecord{FixtureThreads: "8", Name: "missing_waldir", Value: "db_bytes=2011349183"},
-		metricRecord{FixtureThreads: "8", Name: "non_numeric", Value: "db_bytes=not-a-number,waldir_bytes=1077936128"},
-		metricRecord{FixtureThreads: "8", Name: "legacy_total", Value: "total_bytes=2011349183"},
-	)
-
-	before := dbSizeInfoFrom(records, "db_size_before")
-	if before == nil {
-		t.Fatal("dbSizeInfoFrom(db_size_before) = nil, want a parsed block")
-	}
-	if before.DBBytes != 2011349183 || before.WALDirBytes != 1077936128 {
-		t.Errorf("db_size_before = %+v, want db_bytes 2011349183 and waldir_bytes 1077936128", *before)
-	}
-	if before.UndoBytes != nil {
-		t.Errorf("db_size_before undo_bytes = %d, want nil when the record omits it", *before.UndoBytes)
-	}
-
-	after := dbSizeInfoFrom(records, "db_size_after")
-	if after == nil {
-		t.Fatal("dbSizeInfoFrom(db_size_after) = nil, want a parsed block")
-	}
-	if after.DBBytes != 2330599835 || after.WALDirBytes != 2147483648 {
-		t.Errorf("db_size_after = %+v, want db_bytes 2330599835 and waldir_bytes 2147483648", *after)
-	}
-	if after.UndoBytes == nil || *after.UndoBytes != 33554432 {
-		t.Errorf("db_size_after undo_bytes = %v, want 33554432", after.UndoBytes)
-	}
-
-	for _, name := range []string{"missing_waldir", "non_numeric", "legacy_total"} {
-		if got := dbSizeInfoFrom(records, name); got != nil {
-			t.Errorf("dbSizeInfoFrom(%q) = %+v, want nil rather than a half-filled block", name, *got)
-		}
-	}
-}
-
-// TestBuildResultDoc_CarriesPgSettingsAndSizesIntoTheResult is the
-// end-to-end check that benchctl's pg_settings/orioledb_version/db and WAL
-// size metadata records reach instance and sweep[] respectively.
-func TestBuildResultDoc_CarriesPgSettingsAndSizesIntoTheResult(t *testing.T) {
+// TestBuildResultDoc_CarriesPgSettingsIntoTheInstance is the end-to-end
+// check that benchctl's pg_settings/orioledb_version metadata records reach
+// instance.
+func TestBuildResultDoc_CarriesPgSettingsIntoTheInstance(t *testing.T) {
 	dir := t.TempDir()
 	extra := []metricRecord{
 		{FixtureThreads: "12", Name: "pg_settings", Value: "shared_buffers=12800, work_mem=5120"},
 		{FixtureThreads: "12", Name: "orioledb_version", Value: "OrioleDB beta 17"},
-		{FixtureThreads: "12", Name: "db_size_before", Value: "db_bytes=2011349183,waldir_bytes=1077936128,undo_bytes=16777216"},
-		{FixtureThreads: "12", Name: "db_size_after", Value: "db_bytes=2330599835,waldir_bytes=2147483648,undo_bytes=33554432"},
-		{FixtureThreads: "12", Name: "wal_size_before", Value: "wal_bytes=863871697"},
-		{FixtureThreads: "12", Name: "wal_size_after", Value: "wal_bytes=1077881251"},
 	}
 	candidates := []candidateRun{
 		makeCandidateRun(t, dir, "run-a", 1, "12", 1500.0, "1.2.0", "latest", extra...),
@@ -864,41 +677,6 @@ func TestBuildResultDoc_CarriesPgSettingsAndSizesIntoTheResult(t *testing.T) {
 	}
 	if got := doc.Instance.OrioleDBVersion; got == nil || *got != "OrioleDB beta 17" {
 		t.Errorf("instance.orioledb_version = %v, want %q", got, "OrioleDB beta 17")
-	}
-
-	if len(doc.Sweep) != 1 {
-		t.Fatalf("want 1 sweep point, got %d", len(doc.Sweep))
-	}
-	sp := doc.Sweep[0]
-	for _, c := range []struct {
-		name                         string
-		got                          *dbSizeInfo
-		wantDB, wantWALDir, wantUndo int64
-	}{
-		{"db_size_before", sp.DBSizeBefore, 2011349183, 1077936128, 16777216},
-		{"db_size_after", sp.DBSizeAfter, 2330599835, 2147483648, 33554432},
-	} {
-		if c.got == nil {
-			t.Errorf("sweep[0].%s = nil, want a parsed block", c.name)
-			continue
-		}
-		if c.got.DBBytes != c.wantDB || c.got.WALDirBytes != c.wantWALDir ||
-			c.got.UndoBytes == nil || *c.got.UndoBytes != c.wantUndo {
-			t.Errorf("sweep[0].%s = %+v, want db_bytes %d, waldir_bytes %d, undo_bytes %d",
-				c.name, *c.got, c.wantDB, c.wantWALDir, c.wantUndo)
-		}
-	}
-	for _, c := range []struct {
-		name string
-		got  *int64
-		want int64
-	}{
-		{"wal_size_before", sp.WALSizeBefore, 863871697},
-		{"wal_size_after", sp.WALSizeAfter, 1077881251},
-	} {
-		if c.got == nil || *c.got != c.want {
-			t.Errorf("sweep[0].%s = %v, want %d", c.name, c.got, c.want)
-		}
 	}
 }
 

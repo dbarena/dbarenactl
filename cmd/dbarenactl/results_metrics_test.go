@@ -4,7 +4,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
+	"time"
+
+	"github.com/dbarena/dbarenactl/internal/sweepstate"
 )
 
 // TestMetricRecord_UnmarshalsFixtureClientThreads guards against a repeat of
@@ -63,73 +67,206 @@ func TestLoadRunMetrics_SkipsWarmupStepRecords(t *testing.T) {
 	}
 }
 
-// driverMetricRecords builds a full, valid set of
-// driver_cpu_utilization/driver_network_throughput_bytes_per_sec records
-// (three quantiles each, two directions for network) for use as a base
-// fixture in the loadDriverInfoFrom tests below.
-func driverMetricRecords() []metricRecord {
-	var records []metricRecord
-	cpu := map[string]float64{"0.99": 0.25, "0.999": 0.3, "0.9999": 0.35}
-	for q, v := range cpu {
-		records = append(records, metricRecord{Name: "driver_cpu_utilization", Quantile: q, Value: v})
+// metadataJSON marshals metadataFrom's output so tests compare against the
+// JSON that actually lands in result.json.
+func metadataJSON(t *testing.T, records []metricRecord) string {
+	t.Helper()
+	metadata, err := metadataFrom(records)
+	if err != nil {
+		t.Fatalf("metadataFrom: %v", err)
 	}
-	network := map[string]float64{"0.99": 1000, "0.999": 2000, "0.9999": 3000}
-	for _, direction := range []string{"receive", "transmit"} {
-		for q, v := range network {
-			records = append(records, metricRecord{
-				Name: "driver_network_throughput_bytes_per_sec", Quantile: q, Direction: direction, Value: v,
-			})
-		}
+	data, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatalf("marshal metadata: %v", err)
 	}
-	return records
+	return string(data)
 }
 
-func TestLoadDriverInfoFrom_HappyPath(t *testing.T) {
-	got := loadDriverInfoFrom(driverMetricRecords())
-	if got == nil {
-		t.Fatal("loadDriverInfoFrom = nil, want a populated block")
+func TestMetadataFrom_ParsesKeyValueStrings(t *testing.T) {
+	got := metadataJSON(t, []metricRecord{
+		{Name: "network_rtt", Value: "min_us=96, median_us=154, samples=200"},
+		{Name: "db_size_before", Value: "db_bytes=2011349183,waldir_bytes=1077936128"},
+		{Name: "pg_settings", Value: "checkpoint_completion_target=0.90, synchronous_commit=on"},
+	})
+	want := `{"db_size_before":{"db_bytes":2011349183,"waldir_bytes":1077936128},` +
+		`"network_rtt":{"median_us":154,"min_us":96,"samples":200},` +
+		`"pg_settings":{"checkpoint_completion_target":0.90,"synchronous_commit":"on"}}`
+	if got != want {
+		t.Errorf("metadata =\n%s\nwant\n%s", got, want)
 	}
-	want := loadDriverInfo{
-		CPUUtilization: percentileInfo{P99: 0.25, P999: 0.3, P9999: 0.35},
-		NetworkThroughputBytesPerSec: networkThroughputInfo{
-			Receive:  percentileInfo{P99: 1000, P999: 2000, P9999: 3000},
-			Transmit: percentileInfo{P99: 1000, P999: 2000, P9999: 3000},
+}
+
+func TestMetadataFrom_KeepsOtherStringsVerbatim(t *testing.T) {
+	version := "PostgreSQL 17.11 on aarch64-unknown-linux-gnu, compiled by gcc"
+	got := metadataJSON(t, []metricRecord{
+		{Name: "pg_version", Value: version},
+		{Name: "half_pairs", Value: "a=1, b"},
+	})
+	want := `{"half_pairs":"a=1, b","pg_version":"` + version + `"}`
+	if got != want {
+		t.Errorf("metadata = %s, want %s", got, want)
+	}
+}
+
+func TestMetadataFrom_NestsNumbersUnderTheirLabels(t *testing.T) {
+	got := metadataJSON(t, []metricRecord{
+		{Name: "driver_cpu_utilization", Quantile: "0.99", Value: 0.25},
+		{Name: "driver_cpu_utilization", Quantile: "0.999", Value: 0.3},
+		{Name: "driver_network_throughput_bytes_per_sec", Direction: "receive", Quantile: "0.99", Value: 1000.0},
+		{Name: "driver_network_throughput_bytes_per_sec", Direction: "transmit", Quantile: "0.99", Value: 2000.0},
+		{Name: "unlabelled", Value: 7.0},
+	})
+	want := `{"driver_cpu_utilization":{"0.99":0.25,"0.999":0.3},` +
+		`"driver_network_throughput_bytes_per_sec":{"receive":{"0.99":1000},"transmit":{"0.99":2000}},` +
+		`"unlabelled":7}`
+	if got != want {
+		t.Errorf("metadata =\n%s\nwant\n%s", got, want)
+	}
+}
+
+func TestMetadataFrom_SkipsMeasurements(t *testing.T) {
+	records := append(newOrderMetricRecords("8", 1000, "v1", "v2"),
+		metricRecord{FixtureThreads: "8", Name: "wal_size_after", Value: "wal_bytes=1077881251"})
+	if got, want := metadataJSON(t, records), `{"wal_size_after":{"wal_bytes":1077881251}}`; got != want {
+		t.Errorf("metadata = %s, want %s", got, want)
+	}
+}
+
+func TestMetadataFrom_RejectsDuplicatePaths(t *testing.T) {
+	for name, records := range map[string][]metricRecord{
+		"same record twice": {
+			{Name: "network_rtt", Value: "min_us=1"},
+			{Name: "network_rtt", Value: "min_us=2"},
 		},
-	}
-	if *got != want {
-		t.Errorf("loadDriverInfoFrom = %+v, want %+v", *got, want)
-	}
-}
-
-func TestLoadDriverInfoFrom_MissingCPUQuantile_ReturnsNil(t *testing.T) {
-	records := driverMetricRecords()
-	for i, r := range records {
-		if r.Name == "driver_cpu_utilization" && r.Quantile == "0.9999" {
-			records = append(records[:i], records[i+1:]...)
-			break
+		"value and labelled value": {
+			{Name: "driver_cpu_utilization", Value: 0.1},
+			{Name: "driver_cpu_utilization", Quantile: "0.99", Value: 0.2},
+		},
+	} {
+		if _, err := metadataFrom(records); err == nil {
+			t.Errorf("%s: metadataFrom succeeded, want a duplicate-path error", name)
 		}
 	}
-	if got := loadDriverInfoFrom(records); got != nil {
-		t.Errorf("loadDriverInfoFrom = %+v, want nil (missing a CPU quantile)", *got)
+}
+
+func TestLoadStepWindows_KeysBenchmarkStepsByClientThreads(t *testing.T) {
+	dir := t.TempDir()
+	data := `[
+  {"step": "warmup", "fixture": {"client_threads": "8"}, "started_at": "2026-09-30T12:02:23Z", "ended_at": "2026-09-30T12:32:25Z"},
+  {"step": "benchmark", "fixture": {"client_threads": "8"}, "started_at": "2026-09-30T12:32:27.2244Z", "ended_at": "2026-09-30T13:32:29.1820Z"},
+  {"step": "benchmark", "fixture": {"client_threads": "16"}, "started_at": "2026-09-30T14:03:35Z", "ended_at": "2026-09-30T15:03:37Z"}
+]`
+	if err := os.WriteFile(filepath.Join(dir, "step_windows.json"), []byte(data), 0o644); err != nil {
+		t.Fatalf("write step_windows.json: %v", err)
+	}
+
+	windows, err := loadStepWindows(dir)
+	if err != nil {
+		t.Fatalf("loadStepWindows: %v", err)
+	}
+	if len(windows) != 2 {
+		t.Fatalf("want 2 windows (benchmark steps only), got %d: %v", len(windows), windows)
+	}
+	want := time.Date(2026, 9, 30, 12, 32, 27, 224400000, time.UTC)
+	if got := windows[8].StartedAt; !got.Equal(want) {
+		t.Errorf("windows[8].StartedAt = %v, want %v (the benchmark step, not warmup)", got, want)
+	}
+	if got := windows[16].EndedAt; !got.Equal(time.Date(2026, 9, 30, 15, 3, 37, 0, time.UTC)) {
+		t.Errorf("windows[16].EndedAt = %v", got)
 	}
 }
 
-func TestLoadDriverInfoFrom_MissingNetworkDirection_ReturnsNil(t *testing.T) {
-	var records []metricRecord
-	for _, r := range driverMetricRecords() {
-		if r.Name == "driver_network_throughput_bytes_per_sec" && r.Direction == "transmit" {
-			continue
+func TestLoadStepWindows_MissingFileYieldsNil(t *testing.T) {
+	windows, err := loadStepWindows(t.TempDir())
+	if err != nil || windows != nil {
+		t.Errorf("loadStepWindows = %v, %v; want nil, nil", windows, err)
+	}
+}
+
+// runWithTpm builds an in-memory candidate run with the given NEW_ORDER tpm
+// per concurrency level.
+func runWithTpm(runID string, iteration int, tpmByThreads map[int]float64) candidateRun {
+	metrics := map[int][]metricRecord{}
+	for threads, tpm := range tpmByThreads {
+		metrics[threads] = newOrderMetricRecords(strconv.Itoa(threads), tpm, "", "")
+	}
+	return candidateRun{
+		run:              &sweepstate.Run{RunID: runID, IterationAttempt: iteration},
+		metricsByThreads: metrics,
+	}
+}
+
+// TestSelectRuns_MethodologyExample uses the worked example from the
+// methodology: runs peak at different client counts, and the peak is where
+// the median is highest.
+func TestSelectRuns_MethodologyExample(t *testing.T) {
+	runs := []candidateRun{
+		runWithTpm("run-1", 1, map[int]float64{4: 9302, 8: 15529, 16: 18085, 24: 7647}),
+		runWithTpm("run-2", 2, map[int]float64{4: 9395, 8: 14846, 16: 16200, 24: 7228}),
+		runWithTpm("run-3", 3, map[int]float64{4: 10948, 8: 16300, 16: 11852, 24: 8079}),
+	}
+	peak, median, err := selectRuns(runs)
+	if err != nil {
+		t.Fatalf("selectRuns: %v", err)
+	}
+	if peak != 16 {
+		t.Errorf("peak = %d, want 16", peak)
+	}
+	for threads, wantRun := range map[int]string{4: "run-2", 8: "run-1", 16: "run-2", 24: "run-1"} {
+		if got := median[threads].run.RunID; got != wantRun {
+			t.Errorf("median[%d] = %s, want %s", threads, got, wantRun)
 		}
-		records = append(records, r)
-	}
-	if got := loadDriverInfoFrom(records); got != nil {
-		t.Errorf("loadDriverInfoFrom = %+v, want nil (transmit direction entirely missing)", *got)
 	}
 }
 
-func TestLoadDriverInfoFrom_NoDriverRecords_ReturnsNil(t *testing.T) {
-	records := []metricRecord{{Name: "tpcc_tpm", Value: 100.0}}
-	if got := loadDriverInfoFrom(records); got != nil {
-		t.Errorf("loadDriverInfoFrom = %+v, want nil (no driver_* records at all)", *got)
+func TestSelectRuns_TieGoesToLowerConcurrency(t *testing.T) {
+	runs := []candidateRun{runWithTpm("run-1", 1, map[int]float64{8: 1000, 16: 1000})}
+	peak, _, err := selectRuns(runs)
+	if err != nil {
+		t.Fatalf("selectRuns: %v", err)
+	}
+	if peak != 8 {
+		t.Errorf("peak = %d, want 8", peak)
+	}
+}
+
+func TestSelectRuns_EvenRunCountPicksLowerMedian(t *testing.T) {
+	runs := []candidateRun{
+		runWithTpm("run-1", 1, map[int]float64{8: 2000}),
+		runWithTpm("run-2", 2, map[int]float64{8: 1000}),
+	}
+	_, median, err := selectRuns(runs)
+	if err != nil {
+		t.Fatalf("selectRuns: %v", err)
+	}
+	if got := median[8].run.RunID; got != "run-2" {
+		t.Errorf("median[8] = %s, want run-2", got)
+	}
+}
+
+func TestSelectRuns_LevelMissingFromARunCannotBeThePeak(t *testing.T) {
+	runs := []candidateRun{
+		runWithTpm("run-1", 1, map[int]float64{8: 1000, 16: 5000}),
+		runWithTpm("run-2", 2, map[int]float64{8: 1100}),
+	}
+	peak, median, err := selectRuns(runs)
+	if err != nil {
+		t.Fatalf("selectRuns: %v", err)
+	}
+	if peak != 8 {
+		t.Errorf("peak = %d, want 8", peak)
+	}
+	if got := median[16].run.RunID; got != "run-1" {
+		t.Errorf("median[16] = %s, want run-1 (still reported)", got)
+	}
+}
+
+func TestSelectRuns_NoCommonLevelIsAnError(t *testing.T) {
+	runs := []candidateRun{
+		runWithTpm("run-1", 1, map[int]float64{8: 1000}),
+		runWithTpm("run-2", 2, map[int]float64{16: 1000}),
+	}
+	if _, _, err := selectRuns(runs); err == nil {
+		t.Error("selectRuns succeeded, want an error")
 	}
 }

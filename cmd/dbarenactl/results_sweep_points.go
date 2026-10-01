@@ -6,13 +6,11 @@ import (
 	"path/filepath"
 	"sort"
 	"time"
-
-	"github.com/dbarena/dbarenactl/internal/pricing"
 )
 
 // sweepPointsResult is buildSweepPoints' return: the assembled sweep points
-// plus the two facts (from pg_version) and the measured time span that only
-// emerge while walking the selected run's records.
+// plus the test-point facts and the measured time span that only emerge
+// while walking the runs' records.
 type sweepPointsResult struct {
 	Points          []sweepPointJSON
 	EngineVersion   string
@@ -25,9 +23,8 @@ type sweepPointsResult struct {
 	MeasuredTo      time.Time
 }
 
-// sweepPointMeta bundles the facts buildSweepPoint gleans from a
-// concurrency level's metadata records while assembling its sweepPointJSON,
-// for buildSweepPoints to aggregate up into sweepPointsResult.
+// sweepPointMeta bundles the test-point facts one concurrency level's
+// records carry, for buildSweepPoints to aggregate up into sweepPointsResult.
 type sweepPointMeta struct {
 	EngineVersion   string
 	CPUArch         string
@@ -37,36 +34,35 @@ type sweepPointMeta struct {
 	OrioleDBVersion string
 }
 
-// buildSweepPoints builds one sweepPointJSON per concurrency level the
-// selected run has data for -- no other candidate contributes anything to
-// the result itself, only to sweep[].iterations' reference listing (see
-// buildIterationEntries).
-func buildSweepPoints(scenario string, successful []candidateRun, selected candidateRun, warehouses *float64, scenarioDir string) (sweepPointsResult, error) {
-	var threads []int
-	for t := range selected.metricsByThreads {
-		threads = append(threads, t)
+// buildSweepPoints builds one sweepPointJSON per concurrency level any run
+// has data for, listing every run's measurement at that level. median and
+// peak come from selectRuns. Facts about the test point itself (versions,
+// settings) are read from the median runs' records.
+func buildSweepPoints(scenario string, runs []candidateRun, peak int, median map[int]candidateRun, warehouses *float64, scenarioDir string) (sweepPointsResult, error) {
+	var levels []int
+	for threads := range median {
+		levels = append(levels, threads)
 	}
-	sort.Ints(threads)
-	var maxConcurrency int
-	if len(threads) > 0 {
-		maxConcurrency = threads[len(threads)-1]
-	}
+	sort.Ints(levels)
 
-	result := sweepPointsResult{MeasuredFrom: selected.run.CreatedAt, MeasuredTo: selected.run.UpdatedAt}
-	for _, c := range successful {
-		if c.run.CreatedAt.Before(result.MeasuredFrom) {
+	var result sweepPointsResult
+	for i, c := range runs {
+		if i == 0 || c.run.CreatedAt.Before(result.MeasuredFrom) {
 			result.MeasuredFrom = c.run.CreatedAt
 		}
-		if c.run.UpdatedAt.After(result.MeasuredTo) {
+		if i == 0 || c.run.UpdatedAt.After(result.MeasuredTo) {
 			result.MeasuredTo = c.run.UpdatedAt
 		}
 	}
 
-	for _, concurrency := range threads {
-		point, meta, err := buildSweepPoint(scenario, concurrency, maxConcurrency, successful, selected, warehouses, scenarioDir)
-		if err != nil {
-			return sweepPointsResult{}, err
-		}
+	var workloadParams map[string]any
+	if warehouses != nil {
+		workloadParams = map[string]any{"warehouses": *warehouses}
+	}
+
+	for _, concurrency := range levels {
+		medianRun := median[concurrency]
+		meta := sweepPointMetaFrom(medianRun.metricsByThreads[concurrency])
 		// Only overwrite when this level actually reports a value -- a
 		// later level with no pg_version (or pg_settings/orioledb_version)
 		// record shouldn't blank out an earlier level's answer.
@@ -85,113 +81,82 @@ func buildSweepPoints(scenario string, successful []candidateRun, selected candi
 		if meta.OrioleDBVersion != "" {
 			result.OrioleDBVersion = meta.OrioleDBVersion
 		}
-		result.Points = append(result.Points, point)
+
+		var iterations []iterationEntry
+		for _, c := range runs {
+			if _, ok := c.metricsByThreads[concurrency]; !ok {
+				continue
+			}
+			it, err := buildIteration(c, concurrency, c.run.RunID == medianRun.run.RunID, scenarioDir)
+			if err != nil {
+				return sweepPointsResult{}, fmt.Errorf("%s: concurrency %d: run %s: %w", scenario, concurrency, c.run.RunID, err)
+			}
+			iterations = append(iterations, it)
+		}
+		sort.Slice(iterations, func(i, j int) bool { return iterations[i].Iteration < iterations[j].Iteration })
+
+		result.Points = append(result.Points, sweepPointJSON{
+			Concurrency:        concurrency,
+			Peak:               concurrency == peak,
+			WorkloadParameters: workloadParams,
+			Iterations:         iterations,
+		})
 	}
 	if len(result.Points) == 0 {
-		return sweepPointsResult{}, fmt.Errorf("%s: selected run %s has no concurrency levels with data", scenario, selected.run.RunID)
+		return sweepPointsResult{}, fmt.Errorf("%s: no concurrency levels with data", scenario)
 	}
 	return result, nil
 }
 
-// buildSweepPoint builds one concurrency level's sweepPointJSON from the
-// selected run's own data, plus the reference listing of every other
-// successful iteration's throughput at this concurrency (see
-// buildIterationEntries).
-func buildSweepPoint(scenario string, concurrency, maxConcurrency int, successful []candidateRun, selected candidateRun, warehouses *float64, scenarioDir string) (point sweepPointJSON, meta sweepPointMeta, err error) {
-	records := selected.metricsByThreads[concurrency]
-	tpm, err := tpmAt(records)
-	if err != nil {
-		return point, sweepPointMeta{}, fmt.Errorf("%s: concurrency %d: %w", scenario, concurrency, err)
-	}
-	p50, p95, p99, err := latencyFor(records, "NEW_ORDER")
-	if err != nil {
-		return point, sweepPointMeta{}, fmt.Errorf("%s: concurrency %d: %w", scenario, concurrency, err)
-	}
-	txns, errs, err := buildTxnMetrics(records)
-	if err != nil {
-		return point, sweepPointMeta{}, fmt.Errorf("%s: concurrency %d: %w", scenario, concurrency, err)
-	}
+// sweepPointMetaFrom reads the test-point facts one concurrency level's
+// records carry.
+func sweepPointMetaFrom(records []metricRecord) sweepPointMeta {
+	var meta sweepPointMeta
 	meta.EngineVersion, meta.CPUArch = pgVersionInfo(records)
 	meta.BenchctlVersion, meta.GotpcVersion = toolVersionInfo(records)
 	meta.PgSettings = pgSettingsInfo(records)
 	meta.OrioleDBVersion = orioledbVersionInfo(records)
-
-	var workloadParams map[string]any
-	if warehouses != nil {
-		workloadParams = map[string]any{"warehouses": *warehouses}
-	}
-
-	iterations, err := buildIterationEntries(scenario, concurrency, maxConcurrency, successful, selected, scenarioDir)
-	if err != nil {
-		return point, sweepPointMeta{}, err
-	}
-
-	point = sweepPointJSON{
-		Concurrency:        concurrency,
-		WorkloadParameters: workloadParams,
-		Network:            networkRTTInfo(records),
-		LoadDriver:         loadDriverInfoFrom(records),
-		DBSizeBefore:       dbSizeInfoFrom(records, "db_size_before"),
-		DBSizeAfter:        dbSizeInfoFrom(records, "db_size_after"),
-		WALSizeBefore:      sizeBytesInfo(records, "wal_size_before"),
-		WALSizeAfter:       sizeBytesInfo(records, "wal_size_after"),
-		Iterations:         iterations,
-		Summary: summaryInfo{
-			Throughput: throughputInfo{Metric: "tpm", Unit: "transactions/min", Transaction: strPtr("NEW_ORDER"), Value: pricing.RoundTo(tpm, 0)},
-			LatencyMs:  latencyInfo{Transaction: strPtr("NEW_ORDER"), P50: p50, P95: p95, P99: p99},
-		},
-		WorkloadMetrics: &workloadMetrics{Transactions: txns, Errors: errs},
-	}
-	return point, meta, nil
+	return meta
 }
 
-// buildIterationEntries lists every successful iteration's throughput at
-// this concurrency -- not just the selected one -- so a reader can see the
-// full spread, sorted by iteration number for a stable order. Only the
-// selected iteration ever gets a raw-clients CSV written and referenced,
-// and only at the sweep's maximum concurrency (maxConcurrency): no
-// pooling/intermingling across a test point's independent iterations
-// (selectRepresentativeRun's policy), and one raw-clients CSV per sweep
-// rather than one per concurrency level.
-func buildIterationEntries(scenario string, concurrency, maxConcurrency int, successful []candidateRun, selected candidateRun, scenarioDir string) ([]iterationEntry, error) {
-	var iterations []iterationEntry
-	for _, c := range successful {
-		candidateRecords, ok := c.metricsByThreads[concurrency]
-		if !ok {
-			continue
-		}
-		candidateTpm, err := tpmAt(candidateRecords)
-		if err != nil {
-			return nil, fmt.Errorf("%s: concurrency %d: run %s: %w", scenario, concurrency, c.run.RunID, err)
-		}
-
-		var notes *string
-		var rawMetricsFile *string
-		if c.run.RunID == selected.run.RunID {
-			notes = strPtr("This iteration's data (median tpm at this test point's peak concurrency) is used " +
-				"for summary/workload_metrics below.")
-			if concurrency == maxConcurrency {
-				if rawPath, ok := c.rawSamplesByThreads[concurrency]; ok {
-					relName := fmt.Sprintf("raw-clients-%d.csv", concurrency)
-					if err := writeRawClientsCSV(rawPath, filepath.Join(scenarioDir, relName)); err != nil {
-						fmt.Fprintf(os.Stderr, "warning: %s: concurrency %d: could not write raw-clients csv: %v\n", scenario, concurrency, err)
-					} else {
-						rawMetricsFile = &relName
-					}
-				}
-			}
-		} else {
-			notes = strPtr("started_at/completed_at reflect the whole run's span, not this specific concurrency.")
-		}
-		iterations = append(iterations, iterationEntry{
-			Iteration:      c.run.IterationAttempt,
-			StartedAt:      c.run.CreatedAt.UTC().Format(time.RFC3339),
-			CompletedAt:    c.run.UpdatedAt.UTC().Format(time.RFC3339),
-			Throughput:     pricing.RoundTo(candidateTpm, 0),
-			RawMetricsFile: rawMetricsFile,
-			Notes:          notes,
-		})
+// buildIteration builds one run's measurement at one concurrency level and
+// writes that run's raw-clients CSV next to result.json.
+func buildIteration(c candidateRun, concurrency int, isMedian bool, scenarioDir string) (iterationEntry, error) {
+	records := c.metricsByThreads[concurrency]
+	txns, errs, err := buildTxnMetrics(records)
+	if err != nil {
+		return iterationEntry{}, err
 	}
-	sort.Slice(iterations, func(i, j int) bool { return iterations[i].Iteration < iterations[j].Iteration })
-	return iterations, nil
+	metadata, err := metadataFrom(records)
+	if err != nil {
+		return iterationEntry{}, err
+	}
+
+	// started_at/completed_at are the measured benchmark step at this
+	// concurrency level.
+	// TODO: remove the fallback to the run's span once all runs carry step_windows.json.
+	startedAt, completedAt := c.run.CreatedAt, c.run.UpdatedAt
+	if w, ok := c.stepWindows[concurrency]; ok {
+		startedAt, completedAt = w.StartedAt, w.EndedAt
+	}
+
+	var rawMetricsFile *string
+	if rawPath, ok := c.rawSamplesByThreads[concurrency]; ok {
+		relName := fmt.Sprintf("raw-clients-%d-iteration-%d.csv", concurrency, c.run.IterationAttempt)
+		if err := writeRawClientsCSV(rawPath, filepath.Join(scenarioDir, relName)); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: concurrency %d: run %s: could not write raw-clients csv: %v\n", concurrency, c.run.RunID, err)
+		} else {
+			rawMetricsFile = &relName
+		}
+	}
+
+	return iterationEntry{
+		Iteration:       c.run.IterationAttempt,
+		Median:          isMedian,
+		StartedAt:       startedAt.UTC().Format(time.RFC3339),
+		CompletedAt:     completedAt.UTC().Format(time.RFC3339),
+		WorkloadMetrics: &workloadMetrics{Transactions: txns, Errors: errs},
+		Metadata:        metadata,
+		RawMetricsFile:  rawMetricsFile,
+	}, nil
 }

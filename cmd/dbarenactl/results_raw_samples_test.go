@@ -68,10 +68,7 @@ func TestWriteRawClientsCSV_FiltersToNewOrderOkAndSortsByTSeconds(t *testing.T) 
 
 	rows := readCSVRows(t, dest)
 	wantHeader := []string{
-		"t_seconds", "new_order_tpm", "new_order_avg_latency_ms",
-		"new_order_p50_latency_ms", "new_order_p90_latency_ms",
-		"new_order_p95_latency_ms", "new_order_p99_latency_ms",
-		"new_order_p99_9_latency_ms", "new_order_max_latency_ms",
+		"t_seconds", "new_order_tpm",
 	}
 	if len(rows) == 0 {
 		t.Fatal("no rows written")
@@ -93,9 +90,6 @@ func TestWriteRawClientsCSV_FiltersToNewOrderOkAndSortsByTSeconds(t *testing.T) 
 	}
 	if dataRows[0][1] != "15000.5" {
 		t.Errorf("row[0].new_order_tpm = %q, want 15000.5", dataRows[0][1])
-	}
-	if dataRows[0][2] != "3.6" {
-		t.Errorf("row[0].new_order_avg_latency_ms = %q, want 3.6", dataRows[0][2])
 	}
 	if dataRows[1][1] != "18000.2" {
 		t.Errorf("row[1].new_order_tpm = %q, want 18000.2", dataRows[1][1])

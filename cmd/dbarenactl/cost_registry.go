@@ -22,17 +22,19 @@ func newCostCalculators() map[string]pricing.Calculator {
 	}
 }
 
-// vcpuRAMFunc derives (vcpu, ram_gb) for one instance type/project_size from
-// a pricing snapshot's items -- AWS and Supabase read it off the matched
-// item's own attributes; GCP parses it out of the tier string and ignores
-// items entirely. Unified into one signature so `results` can call whichever
-// applies without a type switch.
+// vcpuRAMFunc derives (vcpu, ram_gb) for one instance type from a pricing
+// snapshot's items -- AWS reads it off the matched item's own attributes;
+// GCP parses it out of the tier string and ignores items entirely. Supabase
+// is deliberately absent: its vcpu/ram_gb come from each run's own
+// diagnostics/addons.json instead (see supabaseComputeSize), not from a
+// pricing snapshot -- supabase.com/pricing.md's Compute Add-Ons table no
+// longer publishes a parseable vCPU count for every tier (shared-compute
+// sizes list "Shared compute" with no number).
 type vcpuRAMFunc func(items []pricing.Item, instanceType string) (vcpu, ramGB float64, err error)
 
 func newVCPURAMFuncs() map[string]vcpuRAMFunc {
 	return map[string]vcpuRAMFunc{
 		"gcp/cloudsql": gcp.VCPUAndRAMGB,
 		"aws/rds":      aws.VCPUAndRAMGB,
-		"supabase":     supabase.VCPUAndRAMGB,
 	}
 }

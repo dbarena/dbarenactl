@@ -34,20 +34,21 @@ func skuFor(projectSize string) (string, error) {
 type Calculator struct{}
 
 // Cost implements pricing.Calculator. in.InstanceType is the candidate
-// manifest's project_size (e.g. "small", "xlarge"); in.DiskType defaults to
-// "gp3" (General Purpose), matching every candidate today.
+// manifest's project_size (e.g. "small", "xlarge"); in.DiskType is the
+// candidate manifest's disk_type (e.g. "gp3", "io2") -- every candidate
+// declares it explicitly, so there's no default to fall back to.
 func (Calculator) Cost(items []pricing.Item, in pricing.CostInput) (*pricing.CostBreakdown, error) {
 	if in.InstanceType == "" {
 		return nil, fmt.Errorf("supabase: cost: instance type (project_size) is required")
+	}
+	if in.DiskType == "" {
+		return nil, fmt.Errorf("supabase: cost: disk type is required")
 	}
 	sku, err := skuFor(in.InstanceType)
 	if err != nil {
 		return nil, err
 	}
 	diskType := in.DiskType
-	if diskType == "" {
-		diskType = "gp3"
-	}
 
 	computeItem, err := findOneItem(items, func(it pricing.Item) bool {
 		return it.SKU == sku && it.Unit == "month"
@@ -189,49 +190,6 @@ func includedAmount(it pricing.Item) (float64, error) {
 		return 0, fmt.Errorf("supabase: cost: could not parse included_amount %q on sku %s", raw, it.SKU)
 	}
 	return strconv.ParseFloat(strings.ReplaceAll(m[1], ",", ""), 64)
-}
-
-// VCPUAndRAMGB reads vcpu/RAM for projectSize from the matched compute
-// item's own Attributes (parsed live from supabase.com/pricing.md's
-// Compute Add-Ons table), rather than hardcoding a lookup table that could
-// drift from what's actually published.
-func VCPUAndRAMGB(items []pricing.Item, projectSize string) (vcpu, ramGB float64, err error) {
-	sku, err := skuFor(projectSize)
-	if err != nil {
-		return 0, 0, err
-	}
-	item, err := findOneItem(items, func(it pricing.Item) bool { return it.SKU == sku && it.Unit == "month" },
-		fmt.Sprintf("compute add-on rate for project_size %q (SKU %q)", projectSize, sku))
-	if err != nil {
-		return 0, 0, err
-	}
-	cpuStr, ok := item.Attributes["cpu"]
-	if !ok {
-		return 0, 0, fmt.Errorf("supabase: project_size %q pricing item has no cpu attribute", projectSize)
-	}
-	vcpu, err = parseLeadingNumber(cpuStr)
-	if err != nil {
-		return 0, 0, fmt.Errorf("supabase: parse cpu %q: %w", cpuStr, err)
-	}
-	memStr, ok := item.Attributes["memory"]
-	if !ok {
-		return 0, 0, fmt.Errorf("supabase: project_size %q pricing item has no memory attribute", projectSize)
-	}
-	ramGB, err = parseLeadingNumber(memStr)
-	if err != nil {
-		return 0, 0, fmt.Errorf("supabase: parse memory %q: %w", memStr, err)
-	}
-	return vcpu, ramGB, nil
-}
-
-var leadingNumberRe = regexp.MustCompile(`^([\d.]+)`)
-
-func parseLeadingNumber(s string) (float64, error) {
-	m := leadingNumberRe.FindStringSubmatch(strings.TrimSpace(s))
-	if m == nil {
-		return 0, fmt.Errorf("no leading number found in %q", s)
-	}
-	return strconv.ParseFloat(m[1], 64)
 }
 
 func maxFloat(a, b float64) float64 {

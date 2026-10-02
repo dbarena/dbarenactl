@@ -32,7 +32,7 @@ inputs:
     description: Provisioned disk throughput
   disk_type:
     type: string
-    default: gp3
+    required: true
     description: Disk type, gp3 or io2
   profile:
     type: string

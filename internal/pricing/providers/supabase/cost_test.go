@@ -49,7 +49,7 @@ func hasComponent(bd *pricing.CostBreakdown, name string) bool {
 
 func TestCost_SmallProjectSize_NoCreditApplies(t *testing.T) {
 	c := Calculator{}
-	bd, err := c.Cost(fullItemSet(), pricing.CostInput{InstanceType: "small", DiskGB: 8, IOPS: 3000, ThroughputMbps: 125})
+	bd, err := c.Cost(fullItemSet(), pricing.CostInput{InstanceType: "small", DiskType: "gp3", DiskGB: 8, IOPS: 3000, ThroughputMbps: 125})
 	if err != nil {
 		t.Fatalf("Cost: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestCost_SmallProjectSize_NoCreditApplies(t *testing.T) {
 
 func TestCost_MicroProjectSize_CreditApplies(t *testing.T) {
 	c := Calculator{}
-	bd, err := c.Cost(fullItemSet(), pricing.CostInput{InstanceType: "micro", DiskGB: 8, IOPS: 3000, ThroughputMbps: 125})
+	bd, err := c.Cost(fullItemSet(), pricing.CostInput{InstanceType: "micro", DiskType: "gp3", DiskGB: 8, IOPS: 3000, ThroughputMbps: 125})
 	if err != nil {
 		t.Fatalf("Cost: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestCost_ProjectSizeVocabularyTranslation(t *testing.T) {
 	c := Calculator{}
 	// "xlarge" (manifest vocabulary) must resolve to the "XL" SKU
 	// (pricing.md vocabulary) -- not a plain case-fold of the input.
-	bd, err := c.Cost(fullItemSet(), pricing.CostInput{InstanceType: "xlarge", DiskGB: 8, IOPS: 3000, ThroughputMbps: 125})
+	bd, err := c.Cost(fullItemSet(), pricing.CostInput{InstanceType: "xlarge", DiskType: "gp3", DiskGB: 8, IOPS: 3000, ThroughputMbps: 125})
 	if err != nil {
 		t.Fatalf("Cost: %v", err)
 	}
@@ -108,14 +108,21 @@ func TestCost_ProjectSizeVocabularyTranslation(t *testing.T) {
 
 func TestCost_UnrecognizedProjectSize_Errors(t *testing.T) {
 	c := Calculator{}
-	if _, err := c.Cost(fullItemSet(), pricing.CostInput{InstanceType: "not-a-real-size", DiskGB: 8}); err == nil {
+	if _, err := c.Cost(fullItemSet(), pricing.CostInput{InstanceType: "not-a-real-size", DiskType: "gp3", DiskGB: 8}); err == nil {
 		t.Fatal("expected an error for an unrecognized project_size")
+	}
+}
+
+func TestCost_RequiresDiskType_Errors(t *testing.T) {
+	c := Calculator{}
+	if _, err := c.Cost(fullItemSet(), pricing.CostInput{InstanceType: "small", DiskGB: 8}); err == nil {
+		t.Fatal("expected an error when disk type is missing")
 	}
 }
 
 func TestCost_DiskOverage_Gp3(t *testing.T) {
 	c := Calculator{}
-	bd, err := c.Cost(fullItemSet(), pricing.CostInput{InstanceType: "small", DiskGB: 28, IOPS: 4000, ThroughputMbps: 200})
+	bd, err := c.Cost(fullItemSet(), pricing.CostInput{InstanceType: "small", DiskType: "gp3", DiskGB: 28, IOPS: 4000, ThroughputMbps: 200})
 	if err != nil {
 		t.Fatalf("Cost: %v", err)
 	}
@@ -138,7 +145,7 @@ func TestCost_DiskOverage_CommaFormattedIncludedAmount(t *testing.T) {
 	// the comma, not choke on it or silently treat it as included=3 (or
 	// included=0, over-billing every test point).
 	c := Calculator{}
-	bd, err := c.Cost(fullItemSet(), pricing.CostInput{InstanceType: "small", DiskGB: 8, IOPS: 3000, ThroughputMbps: 125})
+	bd, err := c.Cost(fullItemSet(), pricing.CostInput{InstanceType: "small", DiskType: "gp3", DiskGB: 8, IOPS: 3000, ThroughputMbps: 125})
 	if err != nil {
 		t.Fatalf("Cost: %v", err)
 	}
@@ -172,28 +179,12 @@ func TestCost_MissingComputeSKU_Errors(t *testing.T) {
 			items = append(items, it)
 		}
 	}
-	_, err := c.Cost(items, pricing.CostInput{InstanceType: "small", DiskGB: 8})
+	_, err := c.Cost(items, pricing.CostInput{InstanceType: "small", DiskType: "gp3", DiskGB: 8})
 	if err == nil {
 		t.Fatal("expected an error when the compute SKU for this project_size is missing from the snapshot")
 	}
 	if !strings.Contains(err.Error(), "compute add-on rate") {
 		t.Errorf("err = %v, want it to mention the missing compute add-on rate", err)
-	}
-}
-
-func TestVCPUAndRAMGB(t *testing.T) {
-	vcpu, ramGB, err := VCPUAndRAMGB(fullItemSet(), "xlarge")
-	if err != nil {
-		t.Fatalf("VCPUAndRAMGB: %v", err)
-	}
-	if vcpu != 4 || ramGB != 16 {
-		t.Errorf("vcpu=%v ramGB=%v, want 4, 16", vcpu, ramGB)
-	}
-}
-
-func TestVCPUAndRAMGB_UnrecognizedProjectSize_Errors(t *testing.T) {
-	if _, _, err := VCPUAndRAMGB(fullItemSet(), "not-a-real-size"); err == nil {
-		t.Fatal("expected an error for an unrecognized project_size")
 	}
 }
 
@@ -229,7 +220,7 @@ func TestCost_DiskThroughputOverage_AmountAndDetailAgree(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := Calculator{}
 			bd, err := c.Cost(itemSetWithThroughputRate(0.095), pricing.CostInput{
-				InstanceType: "small", DiskGB: 8, IOPS: 3000, ThroughputMbps: tc.throughputMbps,
+				InstanceType: "small", DiskType: "gp3", DiskGB: 8, IOPS: 3000, ThroughputMbps: tc.throughputMbps,
 			})
 			if err != nil {
 				t.Fatalf("Cost: %v", err)

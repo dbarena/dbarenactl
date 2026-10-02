@@ -150,6 +150,24 @@ func TestResolvePricingInputs_SupabaseReadsProjectSizeFromSet(t *testing.T) {
 	}
 }
 
+// TestResolvePricingInputs_SupabaseReadsDiskTypeFromSet covers disk_type,
+// which every Supabase manifest declares under set: (a real benchctl
+// scenario input, required since scenario.yaml dropped its implicit
+// default) -- not under pricing:, which no Supabase manifest ever
+// populates.
+func TestResolvePricingInputs_SupabaseReadsDiskTypeFromSet(t *testing.T) {
+	def := &manifest.TestPointDef{
+		Set:     map[string]string{"project_size": "xlarge", "disk_type": "gp3"},
+		Pricing: map[string]string{"disk_type": "io2"}, // must be ignored for Supabase
+	}
+
+	pi := resolvePricingInputs(manifest.ProviderSupabase, def)
+
+	if pi.diskType != "gp3" {
+		t.Errorf("diskType = %q, want %q read from Set, not Pricing", pi.diskType, "gp3")
+	}
+}
+
 // TestResolvePricingInputs_SupabaseIgnoresStraySetKeys guards against a
 // db_instance_type key accidentally placed in Set (as every AWS/GCP candidate
 // file used to do, historically) leaking into a Supabase result -- Supabase's
@@ -281,7 +299,7 @@ func TestBuildInstanceInfo_SetsDiskType(t *testing.T) {
 	diskGB := 64.0
 	pi := pricingInputs{instanceType: "db.m6g.xlarge", diskType: "gp3", diskGB: &diskGB}
 
-	info := buildInstanceInfo(nil, "aws/rds", pi, "x86_64", "PostgreSQL 17", "", "")
+	info := buildInstanceInfo(nil, "aws/rds", pi, "x86_64", "PostgreSQL 17", "", "", "")
 
 	if info.DiskType == nil || *info.DiskType != "gp3" {
 		t.Errorf("DiskType = %v, want %q", info.DiskType, "gp3")
@@ -295,7 +313,7 @@ func TestBuildInstanceInfo_SetsPgSettingsAndOrioleDBVersion(t *testing.T) {
 	pi := pricingInputs{instanceType: "small"}
 
 	info := buildInstanceInfo(nil, "supabase/orioledb", pi, "aarch64", "PostgreSQL 17.11",
-		"shared_buffers=12800, work_mem=5120", "OrioleDB beta 17")
+		"shared_buffers=12800, work_mem=5120", "OrioleDB beta 17", "")
 
 	if info.PgSettings == nil || *info.PgSettings != "shared_buffers=12800, work_mem=5120" {
 		t.Errorf("PgSettings = %v, want the raw settings string", info.PgSettings)
@@ -312,7 +330,7 @@ func TestBuildInstanceInfo_SetsPgSettingsAndOrioleDBVersion(t *testing.T) {
 func TestBuildInstanceInfo_OmitsPgSettingsAndOrioleDBVersionWhenAbsent(t *testing.T) {
 	pi := pricingInputs{instanceType: "db.m6g.xlarge"}
 
-	info := buildInstanceInfo(nil, "aws/rds", pi, "x86_64", "PostgreSQL 17", "", "")
+	info := buildInstanceInfo(nil, "aws/rds", pi, "x86_64", "PostgreSQL 17", "", "", "")
 
 	data, err := json.Marshal(info)
 	if err != nil {
@@ -715,5 +733,257 @@ func TestBuildResultDoc_OmitsOrioleDBVersionForOtherEngines(t *testing.T) {
 	}
 	if strings.Contains(string(blob), "pg_settings") {
 		t.Errorf("instance JSON should omit pg_settings, got: %s", blob)
+	}
+}
+
+// TestBuildResultDoc_SupabaseReadsVCPURAMFromDiagnostics asserts Supabase's
+// vcpu/ram_gb come from the run's own diagnostics/addons.json -- not from a
+// pricing snapshot, which this test deliberately leaves nil to prove the
+// diagnostics path doesn't depend on one.
+func TestBuildResultDoc_SupabaseReadsVCPURAMFromDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	candidates := []candidateRun{makeCandidateRun(t, dir, "run-a", 1, "12", 1500.0, "1.2.0", "latest")}
+	writeSupabaseAddonsFixture(t, filepath.Join(dir, "run-a"), 8, 32)
+	scenarioDir := filepath.Join(dir, "scenario")
+	if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
+		t.Fatalf("mkdir scenarioDir: %v", err)
+	}
+
+	doc, err := buildResultDoc(resultDocInputs{
+		Manifest:     &manifest.Manifest{Provider: "Supabase", Product: "OrioleDB", Workload: "tpcc"},
+		TestPoint:    &sweepstate.TestPoint{Tier: "2xlarge", BoundType: "cache-fit", SweepID: "sweep-1"},
+		Def:          &manifest.TestPointDef{Tier: "2xlarge", BoundType: "cache-fit", Set: map[string]string{"project_size": "2xlarge"}},
+		Successful:   candidates,
+		Snapshot:     nil,
+		ManifestPath: "candidate.yaml",
+		ScenarioDir:  scenarioDir,
+	})
+	if err != nil {
+		t.Fatalf("buildResultDoc: %v", err)
+	}
+
+	if got := doc.Instance.VCPU; got == nil || *got != 8 {
+		t.Errorf("instance.vcpu = %v, want 8", got)
+	}
+	if got := doc.Instance.RAMGB; got == nil || *got != 32 {
+		t.Errorf("instance.ram_gb = %v, want 32", got)
+	}
+}
+
+// TestBuildResultDoc_SupabaseLeavesVCPURAMNilWithoutDiagnostics asserts a
+// Supabase run missing diagnostics/addons.json (e.g. an older artifact)
+// still produces a result, just with vcpu/ram_gb left null rather than
+// falling back to any pricing-derived guess.
+func TestBuildResultDoc_SupabaseLeavesVCPURAMNilWithoutDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	candidates := []candidateRun{makeCandidateRun(t, dir, "run-a", 1, "12", 1500.0, "1.2.0", "latest")}
+	scenarioDir := filepath.Join(dir, "scenario")
+	if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
+		t.Fatalf("mkdir scenarioDir: %v", err)
+	}
+
+	doc, err := buildResultDoc(resultDocInputs{
+		Manifest:     &manifest.Manifest{Provider: "Supabase", Product: "OrioleDB", Workload: "tpcc"},
+		TestPoint:    &sweepstate.TestPoint{Tier: "2xlarge", BoundType: "cache-fit", SweepID: "sweep-1"},
+		Def:          &manifest.TestPointDef{Tier: "2xlarge", BoundType: "cache-fit", Set: map[string]string{"project_size": "2xlarge"}},
+		Successful:   candidates,
+		ManifestPath: "candidate.yaml",
+		ScenarioDir:  scenarioDir,
+	})
+	if err != nil {
+		t.Fatalf("buildResultDoc: %v", err)
+	}
+
+	if doc.Instance.VCPU != nil {
+		t.Errorf("instance.vcpu = %v, want nil", *doc.Instance.VCPU)
+	}
+	if doc.Instance.RAMGB != nil {
+		t.Errorf("instance.ram_gb = %v, want nil", *doc.Instance.RAMGB)
+	}
+}
+
+// TestBuildResultDoc_SupabaseDiskTypeFromDiagnosticsWinsOverManifest asserts
+// instance.disk_type comes from the run's own diagnostics/disk.json when
+// present, even when the manifest declares a different value -- diagnostics
+// is the ground truth, the manifest's declared value is only a fallback.
+func TestBuildResultDoc_SupabaseDiskTypeFromDiagnosticsWinsOverManifest(t *testing.T) {
+	dir := t.TempDir()
+	candidates := []candidateRun{makeCandidateRun(t, dir, "run-a", 1, "12", 1500.0, "1.2.0", "latest")}
+	writeSupabaseDiskFixture(t, filepath.Join(dir, "run-a"), "io2")
+	scenarioDir := filepath.Join(dir, "scenario")
+	if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
+		t.Fatalf("mkdir scenarioDir: %v", err)
+	}
+
+	doc, err := buildResultDoc(resultDocInputs{
+		Manifest:     &manifest.Manifest{Provider: "Supabase", Product: "OrioleDB", Workload: "tpcc"},
+		TestPoint:    &sweepstate.TestPoint{Tier: "2xlarge", BoundType: "cache-fit", SweepID: "sweep-1"},
+		Def:          &manifest.TestPointDef{Tier: "2xlarge", BoundType: "cache-fit", Set: map[string]string{"project_size": "2xlarge", "disk_type": "gp3"}},
+		Successful:   candidates,
+		ManifestPath: "candidate.yaml",
+		ScenarioDir:  scenarioDir,
+	})
+	if err != nil {
+		t.Fatalf("buildResultDoc: %v", err)
+	}
+
+	if got := doc.Instance.DiskType; got == nil || *got != "io2" {
+		t.Errorf("instance.disk_type = %v, want %q (diagnostics, not the manifest's %q)", got, "io2", "gp3")
+	}
+}
+
+// TestBuildResultDoc_SupabaseDiskTypeFallsBackToManifestWithoutDiagnostics
+// asserts instance.disk_type falls back to the manifest's declared
+// disk_type when a run has no diagnostics/disk.json.
+func TestBuildResultDoc_SupabaseDiskTypeFallsBackToManifestWithoutDiagnostics(t *testing.T) {
+	dir := t.TempDir()
+	candidates := []candidateRun{makeCandidateRun(t, dir, "run-a", 1, "12", 1500.0, "1.2.0", "latest")}
+	scenarioDir := filepath.Join(dir, "scenario")
+	if err := os.MkdirAll(scenarioDir, 0o755); err != nil {
+		t.Fatalf("mkdir scenarioDir: %v", err)
+	}
+
+	doc, err := buildResultDoc(resultDocInputs{
+		Manifest:     &manifest.Manifest{Provider: "Supabase", Product: "OrioleDB", Workload: "tpcc"},
+		TestPoint:    &sweepstate.TestPoint{Tier: "2xlarge", BoundType: "cache-fit", SweepID: "sweep-1"},
+		Def:          &manifest.TestPointDef{Tier: "2xlarge", BoundType: "cache-fit", Set: map[string]string{"project_size": "2xlarge", "disk_type": "gp3"}},
+		Successful:   candidates,
+		ManifestPath: "candidate.yaml",
+		ScenarioDir:  scenarioDir,
+	})
+	if err != nil {
+		t.Fatalf("buildResultDoc: %v", err)
+	}
+
+	if got := doc.Instance.DiskType; got == nil || *got != "gp3" {
+		t.Errorf("instance.disk_type = %v, want %q (the manifest's configured value)", got, "gp3")
+	}
+}
+
+// writeSupabaseDiskFixture writes a diagnostics/disk.json under runDir
+// shaped like benchctl's real GET .../config/disk snapshot.
+func writeSupabaseDiskFixture(t *testing.T, runDir, diskType string) {
+	t.Helper()
+	diagDir := filepath.Join(runDir, "diagnostics")
+	if err := os.MkdirAll(diagDir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", diagDir, err)
+	}
+	body := fmt.Sprintf(`{"attributes":{"iops":12000,"size_gb":64,"throughput_mibps":300,"type":%q},"last_modified_at":"2026-09-30T09:48:45.950Z"}`, diskType)
+	if err := os.WriteFile(filepath.Join(diagDir, "disk.json"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write disk.json: %v", err)
+	}
+}
+
+// writeSupabaseAddonsFixture writes a diagnostics/addons.json under runDir
+// shaped like benchctl's real GET .../billing/addons snapshot (trimmed to
+// selected_addons, per its diagnostics collector).
+func writeSupabaseAddonsFixture(t *testing.T, runDir string, cpuCores, memoryGB int) {
+	t.Helper()
+	diagDir := filepath.Join(runDir, "diagnostics")
+	if err := os.MkdirAll(diagDir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", diagDir, err)
+	}
+	body := fmt.Sprintf(`{
+  "selected_addons": [
+    {
+      "type": "compute_instance",
+      "variant": {
+        "id": "ci_2xlarge",
+        "name": "2XL",
+        "meta": {
+          "cpu_cores": %d,
+          "cpu_dedicated": true,
+          "memory_gb": %d
+        }
+      }
+    }
+  ]
+}`, cpuCores, memoryGB)
+	if err := os.WriteFile(filepath.Join(diagDir, "addons.json"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write addons.json: %v", err)
+	}
+}
+
+func TestSupabaseComputeSize_MissingFile(t *testing.T) {
+	vcpu, ramGB := supabaseComputeSize(t.TempDir())
+	if vcpu != nil || ramGB != nil {
+		t.Errorf("vcpu=%v ramGB=%v, want nil, nil for a missing diagnostics file", vcpu, ramGB)
+	}
+}
+
+func TestSupabaseComputeSize_MalformedJSON(t *testing.T) {
+	dir := t.TempDir()
+	diagDir := filepath.Join(dir, "diagnostics")
+	if err := os.MkdirAll(diagDir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", diagDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(diagDir, "addons.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatalf("write addons.json: %v", err)
+	}
+
+	vcpu, ramGB := supabaseComputeSize(dir)
+	if vcpu != nil || ramGB != nil {
+		t.Errorf("vcpu=%v ramGB=%v, want nil, nil for malformed JSON", vcpu, ramGB)
+	}
+}
+
+func TestSupabaseComputeSize_NoComputeInstanceEntry(t *testing.T) {
+	dir := t.TempDir()
+	diagDir := filepath.Join(dir, "diagnostics")
+	if err := os.MkdirAll(diagDir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", diagDir, err)
+	}
+	body := `{"selected_addons": [{"type": "pitr", "variant": {"id": "pitr_7"}}]}`
+	if err := os.WriteFile(filepath.Join(diagDir, "addons.json"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write addons.json: %v", err)
+	}
+
+	vcpu, ramGB := supabaseComputeSize(dir)
+	if vcpu != nil || ramGB != nil {
+		t.Errorf("vcpu=%v ramGB=%v, want nil, nil when no compute_instance addon is selected", vcpu, ramGB)
+	}
+}
+
+func TestSupabaseComputeSize_RealPayloadShape(t *testing.T) {
+	dir := t.TempDir()
+	writeSupabaseAddonsFixture(t, dir, 8, 32)
+
+	vcpu, ramGB := supabaseComputeSize(dir)
+	if vcpu == nil || *vcpu != 8 {
+		t.Errorf("vcpu = %v, want 8", vcpu)
+	}
+	if ramGB == nil || *ramGB != 32 {
+		t.Errorf("ramGB = %v, want 32", ramGB)
+	}
+}
+
+func TestSupabaseDiskType_MissingFile(t *testing.T) {
+	if got := supabaseDiskType(t.TempDir()); got != nil {
+		t.Errorf("diskType = %v, want nil for a missing diagnostics file", *got)
+	}
+}
+
+func TestSupabaseDiskType_MalformedJSON(t *testing.T) {
+	dir := t.TempDir()
+	diagDir := filepath.Join(dir, "diagnostics")
+	if err := os.MkdirAll(diagDir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", diagDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(diagDir, "disk.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatalf("write disk.json: %v", err)
+	}
+
+	if got := supabaseDiskType(dir); got != nil {
+		t.Errorf("diskType = %v, want nil for malformed JSON", *got)
+	}
+}
+
+func TestSupabaseDiskType_RealPayloadShape(t *testing.T) {
+	dir := t.TempDir()
+	writeSupabaseDiskFixture(t, dir, "gp3")
+
+	got := supabaseDiskType(dir)
+	if got == nil || *got != "gp3" {
+		t.Errorf("diskType = %v, want %q", got, "gp3")
 	}
 }

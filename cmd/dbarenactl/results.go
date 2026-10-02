@@ -272,10 +272,12 @@ type pricingInputs struct {
 // its compute SKU differently, but all three now declare it as a real
 // benchctl scenario input, read from Set: AWS's db_instance_class, GCP's
 // db_instance_type, and Supabase's project_size (which doubles as its own
-// compute SKU). diskType is similar for GCP (a real benchctl input,
-// disk_type, also read from Set) but not for AWS/Supabase, whose disk type
-// (gp3) isn't a benchctl input -- it's stated explicitly under Pricing.disk_type
-// instead.
+// compute SKU). diskType is similar for GCP and Supabase (both real
+// benchctl inputs named disk_type, read from Set) but not for AWS, whose
+// disk type (gp3) isn't a benchctl input -- it's stated explicitly under
+// Pricing.disk_type instead. Supabase's diskType here is only the
+// manifest's declared value; buildResultDoc overrides it with the run's own
+// diagnostics/disk.json when available (see supabaseDiskType).
 func resolvePricingInputs(provider string, def *manifest.TestPointDef) pricingInputs {
 	var instanceType, diskType string
 	switch provider {
@@ -287,7 +289,7 @@ func resolvePricingInputs(provider string, def *manifest.TestPointDef) pricingIn
 		diskType = def.Set["disk_type"]
 	case manifest.ProviderSupabase:
 		instanceType = def.Set["project_size"]
-		diskType = def.Pricing["disk_type"]
+		diskType = def.Set["disk_type"]
 	}
 	return pricingInputs{
 		instanceType:           instanceType,
@@ -331,6 +333,12 @@ func buildResultDoc(in resultDocInputs) (*resultDoc, error) {
 	product := slugify(in.Manifest.Product)
 	scenario := scenarioSlug(in.TestPoint.BoundType, in.TestPoint.Tier, in.TestPoint.Variant)
 	pi := resolvePricingInputs(in.Manifest.Provider, in.Def)
+	artifactDir := in.Successful[0].run.LocalArtifactDir
+	if in.Manifest.Provider == manifest.ProviderSupabase {
+		if dt := supabaseDiskType(artifactDir); dt != nil {
+			pi.diskType = *dt
+		}
+	}
 
 	sp, err := buildSweepPoints(scenario, in.Successful, peak, median, pi.warehouses, in.ScenarioDir)
 	if err != nil {
@@ -338,7 +346,7 @@ func buildResultDoc(in resultDocInputs) (*resultDoc, error) {
 	}
 
 	pricingFetcherKey := in.Manifest.PricingFetcherKey()
-	instance := buildInstanceInfo(in.Snapshot, pricingFetcherKey, pi, sp.CPUArch, sp.EngineVersion, sp.PgSettings, sp.OrioleDBVersion)
+	instance := buildInstanceInfo(in.Snapshot, pricingFetcherKey, pi, sp.CPUArch, sp.EngineVersion, sp.PgSettings, sp.OrioleDBVersion, artifactDir)
 	repro := buildReproducibility(in.TestPoint, in.ManifestPath, sp.BenchctlVersion, sp.GotpcVersion)
 
 	pricingOut, err := computePricing(in.Snapshot, pricingFetcherKey, pi, scenario, sp.Points)
@@ -364,11 +372,15 @@ func buildResultDoc(in resultDocInputs) (*resultDoc, error) {
 	}, nil
 }
 
-// buildInstanceInfo resolves vcpu/ram_gb (when a pricing snapshot is
-// available to derive them from) and assembles the result's instance block.
-func buildInstanceInfo(snapshot *pricing.Snapshot, pricingFetcherKey string, pi pricingInputs, cpuArch, engineVersion, pgSettings, orioledbVersion string) *instanceInfo {
+// buildInstanceInfo resolves vcpu/ram_gb and assembles the result's instance
+// block. Supabase reads vcpu/ram_gb from the run's own diagnostics/addons.json
+// (the actual compute addon it ran with); every other provider derives them
+// from a pricing snapshot, when one is available.
+func buildInstanceInfo(snapshot *pricing.Snapshot, pricingFetcherKey string, pi pricingInputs, cpuArch, engineVersion, pgSettings, orioledbVersion, artifactDir string) *instanceInfo {
 	var vcpu, ramGB *float64
-	if snapshot != nil && pi.instanceType != "" {
+	if pricingFetcherKey == "supabase" {
+		vcpu, ramGB = supabaseComputeSize(artifactDir)
+	} else if snapshot != nil && pi.instanceType != "" {
 		if fn, ok := newVCPURAMFuncs()[pricingFetcherKey]; ok {
 			if v, r, err := fn(snapshot.Items, pi.instanceType); err == nil {
 				vcpu, ramGB = &v, &r

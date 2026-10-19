@@ -1,6 +1,6 @@
 package main
 
-// The types below mirror dbarena/dbarena's results/schema/result.schema.json
+// The types below mirror dbarena/dbarena.com's results/schema/result.schema.json
 // exactly (field names, nesting, nullability) -- see that file for the
 // authoritative definition. Nullable fields are pointers so an unknown value
 // marshals as explicit JSON null rather than being silently omitted or

@@ -26,7 +26,7 @@ var (
 
 var resultsCmd = &cobra.Command{
 	Use:   "results <sweep-id>",
-	Short: "Assemble result.json files from a sweep's fetched artifacts, ready to submit to dbarena/dbarena",
+	Short: "Assemble result.json files from a sweep's fetched artifacts, ready to submit to dbarena/dbarena.com",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runResults,
 }
@@ -34,7 +34,7 @@ var resultsCmd = &cobra.Command{
 func init() {
 	resultsCmd.Flags().StringVar(&resultsDest, "dest", "",
 		"Directory to write results/ into. Defaults to the current directory if it's a dbarena checkout, "+
-			"or a sibling ../dbarena directory if that's one instead; otherwise a local scratch directory")
+			"or a sibling ../dbarena.com directory if that's one instead; otherwise a local scratch directory")
 	resultsCmd.Flags().StringVar(&resultsCandidate, "candidate", "",
 		"Path to the candidate manifest to use, overriding the one recorded when the sweep was created "+
 			"(needed if that recorded path can't be resolved from the current directory)")

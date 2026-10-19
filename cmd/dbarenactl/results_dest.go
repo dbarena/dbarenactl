@@ -75,7 +75,7 @@ func isDbarenaCheckout(dir string) bool {
 
 // resolveDest implements the --dest auto-detection policy: only two cases
 // are checked (cwd itself is a dbarena checkout, or a sibling directory
-// literally named "dbarena" is) -- no broader directory walking. Falls back
+// literally named "dbarena.com" is) -- no broader directory walking. Falls back
 // to a scratch directory when neither matches and --dest wasn't given.
 func resolveDest(explicit, sweepID string) (dir string, isCheckout bool, err error) {
 	if explicit != "" {
@@ -88,7 +88,7 @@ func resolveDest(explicit, sweepID string) (dir string, isCheckout bool, err err
 	if isDbarenaCheckout(cwd) {
 		return cwd, true, nil
 	}
-	sibling := filepath.Join(cwd, "..", "dbarena")
+	sibling := filepath.Join(cwd, "..", "dbarena.com")
 	if isDbarenaCheckout(sibling) {
 		return sibling, true, nil
 	}
